@@ -1,6 +1,6 @@
 # helloworld
 
-AstrBot 插件模板
+基于AstrBot 插件模板 修改成记账本
 
 A template plugin for AstrBot plugin feature
 
