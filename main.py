@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 import os
 from typing import List, Dict, Optional
 
-@register("account_book", "FinanceBot", "多功能记账本插件", "1.1.0")
+@register("account_book", "FinanceBot", "多功能记账本插件", "1.1.1")
 class AccountBookPlugin(Star):
     def __init__(self, context: Context):
         super().__init__(context)
@@ -83,16 +83,16 @@ class AccountBookPlugin(Star):
         try:
             amount = float(args[1])
             if amount <= 0:
-                return MessageEventResult(plain_text="❌ 金额必须大于0")
+                return MessageEventResult(text="❌ 金额必须大于0")
         except ValueError:
-            return MessageEventResult(plain_text="❌ 金额必须是正数")
+            return MessageEventResult(text="❌ 金额必须是正数")
 
         # 处理日期参数
         date = args[2] if len(args) >= 3 else datetime.now().strftime("%Y-%m-%d")
         try:
             datetime.strptime(date, "%Y-%m-%d")
         except ValueError:
-            return MessageEventResult(plain_text="❌ 日期格式应为YYYY-MM-DD")
+            return MessageEventResult(text="❌ 日期格式应为YYYY-MM-DD")
 
         # 添加记录
         self._records.append({
@@ -102,7 +102,7 @@ class AccountBookPlugin(Star):
         })
         self._save_data()
         
-        return MessageEventResult(plain_text=f"✅ 记录成功: {date} {category} {amount}元")
+        return MessageEventResult(text=f"✅ 记录成功: {date} {category} {amount}元")
 
     @filter.command("查询")
     async def query_records(self, event: AstrMessageEvent, date: str = None) -> MessageEventResult:
@@ -134,7 +134,7 @@ class AccountBookPlugin(Star):
                 end = datetime(year+1, 1, 1).date() - timedelta(days=1)
                 title = f"{year}年"
         except ValueError:
-            return MessageEventResult(plain_text="❌ 日期格式错误\n" + self._show_help("query").plain_text)
+            return MessageEventResult(text="❌ 日期格式错误\n" + self._show_help("query").text)
 
         # 筛选记录
         matched = []
@@ -147,7 +147,7 @@ class AccountBookPlugin(Star):
                 continue
 
         if not matched:
-            return MessageEventResult(plain_text=f"📭 {title}没有记录")
+            return MessageEventResult(text=f"📭 {title}没有记录")
             
         # 格式化结果
         total = sum(float(r["amount"]) for r in matched)
@@ -155,13 +155,13 @@ class AccountBookPlugin(Star):
         for r in sorted(matched, key=lambda x: x["date"]):
             result.append(f"• {r['date']} {r['category']}: {float(r['amount']):.2f}元")
         
-        return MessageEventResult(plain_text="\n".join(result))
+        return MessageEventResult(text="\n".join(result))
 
     @filter.command("统计")
     async def show_stats(self, event: AstrMessageEvent) -> MessageEventResult:
         """查看收入统计"""
         if not self._records:
-            return MessageEventResult(plain_text="📭 暂无任何记录")
+            return MessageEventResult(text="📭 暂无任何记录")
 
         # 按类别统计
         stats = {}
@@ -178,7 +178,7 @@ class AccountBookPlugin(Star):
             bar = "▇" * int(percent / 3)  # 每3%一个方块
             lines.append(f"• {category}: {amount:.2f}元 ({percent:.1f}%) {bar}")
         
-        return MessageEventResult(plain_text="\n".join(lines))
+        return MessageEventResult(text="\n".join(lines))
 
     @filter.command("帮助")
     async def show_help(self, event: AstrMessageEvent) -> MessageEventResult:
@@ -222,10 +222,10 @@ class AccountBookPlugin(Star):
         }
         
         if cmd_type in help_texts:
-            return MessageEventResult(plain_text=help_texts[cmd_type].strip())
-        return MessageEventResult(plain_text=help_texts["default"].strip())
+            return MessageEventResult(text=help_texts[cmd_type].strip())
+        return MessageEventResult(text=help_texts["default"].strip())
 
     @filter.command("导出")
     async def export_data(self, event: AstrMessageEvent) -> MessageEventResult:
         """导出所有记录(开发中)"""
-        return MessageEventResult(plain_text="⏳ 导出功能开发中，敬请期待")
+        return MessageEventResult(text="⏳ 导出功能开发中，敬请期待")
