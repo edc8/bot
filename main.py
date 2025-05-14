@@ -16,8 +16,11 @@ class AccountBookPlugin(Star):
         try:
             with open(self.data_file, "r", encoding="utf-8") as f:
                 self.data = json.load(f)
+                # 确保数据是列表类型
+                if not isinstance(self.data, list):
+                    self.data = []
         except FileNotFoundError:
-            self.data = []
+            self.data = []  # 初始化为空列表
 
     def _save_data(self):
         """保存记账数据"""
