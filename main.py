@@ -9,6 +9,7 @@ import os
 class AccountBookPlugin(Star):
     def __init__(self, context: Context):
         super().__init__(context)
+        self.data_file = "data/account_book_data.json"
         # 确保数据目录存在
         data_dir = os.path.dirname(self.data_file)
         os.makedirs(data_dir, exist_ok=True)
@@ -24,7 +25,7 @@ class AccountBookPlugin(Star):
                     logger.warning("数据格式错误，期望列表，重置为空列表")
                     self.data = []
         except FileNotFoundError:
-            self.data = []
+            self.data = []  # 初始化为空列表
         except Exception as e:
             logger.error(f"加载数据失败: {e}")
             self.data = []
