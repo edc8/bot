@@ -2,225 +2,152 @@ from astrbot.api.event import filter, AstrMessageEvent, MessageEventResult
 from astrbot.api.star import Context, Star, register
 from astrbot.api import logger
 import json
-from datetime import datetime, timedelta
+from datetime import datetime
 import os
-from typing import List, Dict, Optional
+from typing import List, Dict
 
-
-@register("account_book", "FinanceBot", "多功能记账本插件", "1.1.1")
+@register("account_book", "FinanceBot", "一个简单的记账插件", "1.0.0")
 class AccountBookPlugin(Star):
     def __init__(self, context: Context):
         super().__init__(context)
-        # 初始化数据存储
-        self._records: List[Dict] = []
-        # 设置数据文件路径
-        self._plugin_dir = os.path.dirname(os.path.abspath(__file__))
-        self._data_file = os.path.join(self._plugin_dir, "account_data.json")
-        # 加载现有数据
-        self._load_data()
-        logger.info("记账本插件初始化完成")
+        self._records_file = os.path.join(context.get_plugin_data_dir(), "records.json")
+        self._records = self._load_records()
+        logger.info("记账插件初始化完成")
 
-    def _load_data(self) -> None:
-        """安全加载数据文件"""
+    def _load_records(self) -> List[Dict]:
+        """加载历史记录"""
         try:
-            if os.path.exists(self._data_file):
-                with open(self._data_file, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-                    if isinstance(data, list):
-                        self._records = [r for r in data if self._validate_record(r)]
-                        logger.info(f"已加载 {len(self._records)} 条有效记录")
-                    else:
-                        logger.warning("数据文件格式不正确，将初始化空列表")
-        except json.JSONDecodeError:
-            logger.error("数据文件解析失败，将初始化空列表")
+            if os.path.exists(self._records_file):
+                with open(self._records_file, 'r', encoding='utf-8') as f:
+                    return json.load(f)
+            return []
         except Exception as e:
-            logger.error(f"加载数据时出错: {str(e)}")
+            logger.error(f"加载记录失败: {e}")
+            return []
 
-    def _save_data(self) -> None:
-        """保存数据到文件"""
+    def _save_records(self) -> None:
+        """保存记录"""
         try:
-            with open(self._data_file, "w", encoding="utf-8") as f:
+            with open(self._records_file, 'w', encoding='utf-8') as f:
                 json.dump(self._records, f, ensure_ascii=False, indent=2)
-            logger.info("数据保存成功")
         except Exception as e:
-            logger.error(f"保存数据失败: {str(e)}")
+            logger.error(f"保存记录失败: {e}")
 
-    def _validate_record(self, record: Dict) -> bool:
-        """验证记录格式是否正确"""
-        try:
-            # 检查必需字段
-            if not all(k in record for k in ["date", "category", "amount"]):
-                return False
-            # 验证日期格式
-            datetime.strptime(record["date"], "%Y-%m-%d")
-            # 验证金额
-            amount = float(record["amount"])
-            if amount <= 0:
-                return False
-            return True
-        except (ValueError, TypeError):
-            return False
-
-    @filter.command("+")
-    async def add_record(self, event: AstrMessageEvent, *args: str) -> MessageEventResult:
+    @filter.command("记账")
+    async def add_record(self, event: AstrMessageEvent):
+        """添加一条记账记录
+        使用方式: /记账 早餐 -15 今天早上买了包子
         """
-        添加收入记录
-        格式: /+ 类别 金额 [日期]
-        示例: 
-          /+ 工资 8000
-          /+ 奖金 2000 2023-08-15
-        """
-        if len(args) < 2:
-            return self._show_help("add")
+        parts = event.message_str.split()[1:]  # 去掉命令名
+        if len(parts) < 2:
+            yield event.plain_result("❌ 格式错误，正确格式: /记账 分类 金额 [备注]")
+            return
 
-        category = args[0]
-
+        category = parts[0]
+        
         try:
-            amount = float(args[1])
-            if amount <= 0:
-                return MessageEventResult(content="❌ 金额必须大于0")
+            amount = float(parts[1])
         except ValueError:
-            return MessageEventResult(content="❌ 金额必须是正数")
+            yield event.plain_result("❌ 金额必须是数字")
+            return
 
-        # 处理日期参数
-        date = args[2] if len(args) >= 3 else datetime.now().strftime("%Y-%m-%d")
-        try:
-            datetime.strptime(date, "%Y-%m-%d")
-        except ValueError:
-            return MessageEventResult(content="❌ 日期格式应为YYYY-MM-DD")
+        remark = ' '.join(parts[2:]) if len(parts) > 2 else ""
+        date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-        # 添加记录
         self._records.append({
             "date": date,
             "category": category,
-            "amount": amount
+            "amount": amount,
+            "remark": remark
         })
-        self._save_data()
+        self._save_records()
 
-        return MessageEventResult(content=f"✅ 记录成功: {date} {category} {amount}元")
+        yield event.plain_result(f"✅ 已记录: {category} {amount}元{' - ' + remark if remark else ''}")
 
     @filter.command("查询")
-    async def query_records(self, event: AstrMessageEvent, date: str = None) -> MessageEventResult:
+    async def query_records(self, event: AstrMessageEvent):
+        """查询记账记录
+        使用方式: 
+          /查询 - 查看所有记录
+          /查询 餐饮 - 查看餐饮分类的记录
         """
-        查询记录
-        格式: 
-          /查询 YYYY-MM-DD  # 按天
-          /查询 YYYY-MM     # 按月
-          /查询 YYYY        # 按年
-        """
-        if not date:
-            return self._show_help("query")
+        parts = event.message_str.split()[1:]
+        keyword = parts[0] if parts else None
 
-        try:
-            if "-" in date:
-                parts = date.split("-")
-                if len(parts) == 2:  # 按月查询
-                    year, month = map(int, parts)
-                    start = datetime(year, month, 1).date()
-                    end = datetime(year + (month == 12), (month % 12) + 1, 1).date() - timedelta(days=1)
-                    title = f"{year}年{month}月"
-                else:  # 按天查询
-                    target = datetime.strptime(date, "%Y-%m-%d").date()
-                    start = end = target
-                    title = date
-            else:  # 按年查询
-                year = int(date)
-                start = datetime(year, 1, 1).date()
-                end = datetime(year + 1, 1, 1).date() - timedelta(days=1)
-                title = f"{year}年"
-        except ValueError:
-            return MessageEventResult(content="❌ 日期格式错误\n" + self._show_help("query").content)
+        filtered_records = self._records
+        if keyword:
+            filtered_records = [r for r in self._records 
+                               if keyword in r["category"] or keyword in r["remark"]]
 
-        # 筛选记录
-        matched = []
-        for record in self._records:
-            try:
-                record_date = datetime.strptime(record["date"], "%Y-%m-%d").date()
-                if start <= record_date <= end:
-                    matched.append(record)
-            except:
-                continue
+        if not filtered_records:
+            yield event.plain_result("📭 没有找到相关记录")
+            return
 
-        if not matched:
-            return MessageEventResult(content=f"📭 {title}没有记录")
+        result = ["📒 记账记录:"]
+        for record in filtered_records:
+            result.append(f"{record['date']} | {record['category']} | {record['amount']}元" +
+                         (f" | {record['remark']}" if record['remark'] else ""))
 
-        # 格式化结果
-        total = sum(float(r["amount"]) for r in matched)
-        result = [f"📊 {title} 收入记录 (总计: {total:.2f}元)", ""]
-        for r in sorted(matched, key=lambda x: x["date"]):
-            result.append(f"• {r['date']} {r['category']}: {float(r['amount']):.2f}元")
-
-        return MessageEventResult(content="\n".join(result))
+        yield event.plain_result("\n".join(result))
 
     @filter.command("统计")
-    async def show_stats(self, event: AstrMessageEvent) -> MessageEventResult:
-        """查看收入统计"""
+    async def show_stats(self, event: AstrMessageEvent):
+        """统计各类支出和总收入"""
         if not self._records:
-            return MessageEventResult(content="📭 暂无任何记录")
+            yield event.plain_result("📭 暂无记录")
+            return
 
-        # 按类别统计
-        stats = {}
-        for r in self._records:
-            stats[r["category"]] = stats.get(r["category"], 0) + float(r["amount"])
+        category_stats = {}
+        total_income = 0
+        total_expense = 0
 
-        total = sum(stats.values())
-        sorted_stats = sorted(stats.items(), key=lambda x: x[1], reverse=True)
+        for record in self._records:
+            amount = record["amount"]
+            category = record["category"]
+            
+            if amount > 0:
+                total_income += amount
+            else:
+                total_expense += abs(amount)
 
-        # 生成统计图表
-        lines = ["📈 收入统计分析", f"💰 总收入: {total:.2f}元", ""]
-        for category, amount in sorted_stats:
-            percent = amount / total * 100
-            bar = "▇" * int(percent / 3)  # 每3%一个方块
-            lines.append(f"• {category}: {amount:.2f}元 ({percent:.1f}%) {bar}")
+            category_stats[category] = category_stats.get(category, 0) + amount
 
-        return MessageEventResult(content="\n".join(lines))
+        result = ["📊 统计结果:"]
+        result.append(f"总收入: {total_income:.2f}元")
+        result.append(f"总支出: {total_expense:.2f}元")
+        result.append("")
+        result.append("分类统计:")
+        
+        for category, amount in category_stats.items():
+            result.append(f"{category}: {amount:.2f}元")
+
+        yield event.plain_result("\n".join(result))
 
     @filter.command("帮助")
-    async def show_help(self, event: AstrMessageEvent) -> MessageEventResult:
+    async def show_help(self, event: AstrMessageEvent):
         """显示帮助信息"""
-        return self._show_help()
+        help_text = """
+📕 记账插件使用帮助:
 
-    def _show_help(self, cmd_type: str = None) -> MessageEventResult:
-        """生成帮助信息"""
-        help_texts = {
-            "add": """
-💰 添加记录帮助:
-/+ 类别 金额 [日期]
-示例:
-  /+ 工资 8000
-  /+ 奖金 2000 2023-08-15
-注意: 金额必须大于0，日期格式为YYYY-MM-DD
-""",
-            "query": """
-📅 查询记录帮助:
-/查询 YYYY-MM-DD  # 查询某天
-/查询 YYYY-MM     # 查询某月
-/查询 YYYY        # 查询某年
-示例:
-  /查询 2023-08-15
-  /查询 2023-08
-  /查询 2023
-""",
-            "default": """
-📒 记账本使用帮助:
+1. 添加记录:
+   /记账 分类 金额 [备注]
+   示例: /记账 早餐 -15 今天早上买了包子
 
-基本命令:
-/+ 类别 金额 [日期] - 添加记录
-/查询 [日期]       - 查询记录
-/统计             - 查看统计
-/帮助             - 显示帮助
+2. 查询记录:
+   /查询 [关键词]
+   示例: 
+     /查询 - 查看所有记录
+     /查询 餐饮 - 查看餐饮分类的记录
 
-更多帮助:
-/帮助 add    - 添加记录帮助
-/帮助 query  - 查询记录帮助
+3. 统计:
+   /统计 - 查看各类支出和总收入
+
+4. 帮助:
+   /帮助 - 显示此帮助信息
 """
-        }
+        yield event.plain_result(help_text.strip())
 
-        if cmd_type in help_texts:
-            return MessageEventResult(content=help_texts[cmd_type].strip())
-        return MessageEventResult(content=help_texts["default"].strip())
-
-    @filter.command("导出")
-    async def export_data(self, event: AstrMessageEvent) -> MessageEventResult:
-        """导出所有记录(开发中)"""
-        return MessageEventResult(content="⏳ 导出功能开发中，敬请期待")
+    async def terminate(self):
+        """插件卸载时调用"""
+        self._save_records()
+        logger.info("记账插件已卸载")
