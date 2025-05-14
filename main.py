@@ -34,6 +34,7 @@ class AccountingPlugin(Star):
             "/ac 查 - 查看最近10条记录\n"
             "/ac 汇总 - 查看收支汇总信息\n"
             "/ac 分类 - 查看支出分类统计\n"
+            "/ac 收入分类 - 查看收入分类统计\n"
             "/ac 删 [记录ID] - 删除记录\n"
             "/ac 帮助 - 显示本帮助\n"
             "====================\n"
@@ -54,10 +55,10 @@ class AccountingPlugin(Star):
         except ValueError as e:
             yield event.plain_result(f"错误: {str(e)}")
             return
-        
+
         # 记录时间戳
         timestamp = int(time.time())
-        
+
         # 创建记录
         record_id = self.generate_record_id(user_id)
         record = {
@@ -68,13 +69,13 @@ class AccountingPlugin(Star):
             "note": note,
             "timestamp": timestamp
         }
-        
+
         # 添加到记录列表
         self.add_record(user_id, record)
-        
+
         # 保存数据
         self.save_data()
-        
+
         # 返回确认信息
         time_str = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(timestamp))
         yield event.plain_result(f"📝 收入记录已添加\n"
@@ -94,10 +95,10 @@ class AccountingPlugin(Star):
         except ValueError as e:
             yield event.plain_result(f"错误: {str(e)}")
             return
-        
+
         # 记录时间戳
         timestamp = int(time.time())
-        
+
         # 创建记录
         record_id = self.generate_record_id(user_id)
         records = self.user_records.get(user_id, [])
@@ -109,14 +110,14 @@ class AccountingPlugin(Star):
             "note": note,
             "timestamp": timestamp
         }
-        
+
         # 添加到记录列表
         records.append(record)
         self.user_records[user_id] = records
-        
+
         # 保存数据
         self.save_data()
-        
+
         # 返回确认信息
         time_str = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(timestamp))
         yield event.plain_result(f"📝 支出记录已添加\n"
@@ -131,17 +132,17 @@ class AccountingPlugin(Star):
         user_id = event.get_sender_id()
         records = self.user_records.get(user_id, [])
         count_value = 10
-        
+
         if not records:
             yield event.plain_result("📒 没有记账记录")
             return
-        
+
         # 按时间倒序排列
         sorted_records = sorted(records, key=lambda x: x["timestamp"], reverse=True)
-        
+
         # 限制数量
         recent_records = sorted_records[:count_value]
-        
+
         # 构建输出
         output = f"📒 最近 {len(recent_records)} 条记录:\n"
         for record in recent_records:
@@ -156,7 +157,7 @@ class AccountingPlugin(Star):
                 if record["note"]:
                     output += f" ({record['note']})"
                 output += f" - {time_str}\n"
-        
+
         yield event.plain_result(output)
 
     @accounting.command("汇总")
@@ -164,23 +165,23 @@ class AccountingPlugin(Star):
         """查看收支汇总信息"""
         user_id = event.get_sender_id()
         records = self.user_records.get(user_id, [])
-        
+
         if not records:
             yield event.plain_result("📒 没有记账记录")
             return
-        
+
         # 计算总收入、总支出和结余
         total_income = sum(record["amount"] for record in records if record["type"] == "income")
         total_expense = sum(record["amount"] for record in records if record["type"] == "expense")
         balance = total_income - total_expense
-        
+
         # 构建输出
         output = f"📊 收支汇总信息:\n"
         output += f"📅 记录数量: {len(records)}\n"
         output += f"💵 总收入: {total_income}\n"
         output += f"💸 总支出: {total_expense}\n"
         output += f"📈 结余: {balance}\n"
-        
+
         yield event.plain_result(output)
 
     @accounting.command("分类")
@@ -188,20 +189,20 @@ class AccountingPlugin(Star):
         """查看支出分类统计"""
         user_id = event.get_sender_id()
         records = self.user_records.get(user_id, [])
-        
+
         # 按分类统计支出
         category_stats = {}
         for record in records:
             if record["type"] == "expense":
                 category = record["category"]
                 category_stats[category] = category_stats.get(category, 0) + record["amount"]
-        
+
         # 按金额排序
         sorted_categories = sorted(category_stats.items(), key=lambda x: x[1], reverse=True)
-        
+
         # 构建输出
         output = f"📊 支出分类统计:\n"
-        
+
         if not sorted_categories:
             output += "暂无支出记录\n"
         else:
@@ -210,7 +211,37 @@ class AccountingPlugin(Star):
                 output += f"• {category}: {amount} ({percentage:.1f}%)\n"
             if len(sorted_categories) > 5:
                 output += f"• ...等{len(sorted_categories)}个分类\n"
-        
+
+        yield event.plain_result(output)
+
+    @accounting.command("收入分类")
+    async def show_income_categories(self, event: AstrMessageEvent):
+        """查看收入分类统计"""
+        user_id = event.get_sender_id()
+        records = self.user_records.get(user_id, [])
+
+        # 按来源统计收入
+        source_stats = {}
+        for record in records:
+            if record["type"] == "income":
+                source = record["source"]
+                source_stats[source] = source_stats.get(source, 0) + record["amount"]
+
+        # 按金额排序
+        sorted_sources = sorted(source_stats.items(), key=lambda x: x[1], reverse=True)
+
+        # 构建输出
+        output = f"📊 收入来源统计:\n"
+
+        if not sorted_sources:
+            output += "暂无收入记录\n"
+        else:
+            for source, amount in sorted_sources[:5]:  # 只显示前5个来源
+                percentage = (amount / sum(source_stats.values())) * 100
+                output += f"• {source}: {amount} ({percentage:.1f}%)\n"
+            if len(sorted_sources) > 5:
+                output += f"• ...等{len(sorted_sources)}个来源\n"
+
         yield event.plain_result(output)
 
     @accounting.command("删")
@@ -218,24 +249,24 @@ class AccountingPlugin(Star):
         """删除指定记录"""
         user_id = event.get_sender_id()
         records = self.user_records.get(user_id, [])
-        
+
         # 查找记录
         record_index = None
         for i, record in enumerate(records):
             if record["id"] == record_id:
                 record_index = i
                 break
-        
+
         if record_index is None:
             yield event.plain_result(f"❌ 未找到记录ID为 '{record_id}' 的记录")
             return
-        
+
         # 删除记录
         deleted_record = records.pop(record_index)
-        
+
         # 保存数据
         self.save_data()
-        
+
         # 返回确认信息
         time_str = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(deleted_record["timestamp"]))
         yield event.plain_result(f"🗑️ 记录已删除\n"
@@ -245,7 +276,7 @@ class AccountingPlugin(Star):
                                 f"时间: {time_str}")
 
     # ===== 辅助方法 =====
-    
+
     def add_record(self, user_id: str, record: Dict) -> None:
         """添加记录到用户的记录列表"""
         records = self.user_records.get(user_id, [])
