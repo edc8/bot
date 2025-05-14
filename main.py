@@ -9,7 +9,8 @@ import os
 class AccountingPlugin(Star):
     def __init__(self, context: Context):
         super().__init__(context)
-        self.data_file = os.path.join(context.get_plugin_data_dir(), "accounting_data.json")
+        # 修改数据文件路径，直接使用插件目录
+        self.data_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "accounting_data.json")
         self.records = {}
         self.load_data()
 
