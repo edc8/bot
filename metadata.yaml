@@ -1,0 +1,5 @@
+name: account_book
+author: YourName
+description: 一个简单的记账本插件
+version: 1.0.0
+repository: "https://github.com/Soulter/helloworld"  # 添加这一行，即使没有实际仓库也需要占位
