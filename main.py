@@ -13,11 +13,23 @@ class AccountBookPlugin(Star):
         # 确保数据目录存在
         data_dir = os.path.dirname(self.data_file)
         os.makedirs(data_dir, exist_ok=True)
+        
+        # 初始化数据为安全的空列表
+        self._initialize_data()
+        
+        # 加载数据
         self._load_data()
+
+    def _initialize_data(self):
+        """初始化数据结构为安全的空列表"""
+        self.data = []
 
     def _load_data(self):
         """加载并验证记账数据"""
         try:
+            # 重置数据为安全的空列表
+            self._initialize_data()
+            
             # 尝试加载数据文件
             with open(self.data_file, "r", encoding="utf-8") as f:
                 raw_data = json.load(f)
@@ -25,7 +37,6 @@ class AccountBookPlugin(Star):
                 # 验证数据结构是否为列表
                 if not isinstance(raw_data, list):
                     logger.error(f"数据格式错误：期望列表，得到 {type(raw_data).__name__}")
-                    self.data = []
                     return
                 
                 # 验证列表中的每个元素是否为有效的记录
@@ -57,25 +68,28 @@ class AccountBookPlugin(Star):
                     # 所有验证通过，添加到有效记录
                     valid_records.append(item)
                 
+                # 安全地更新数据
                 self.data = valid_records
                 logger.info(f"成功加载 {len(self.data)} 条有效记录")
                 
         except FileNotFoundError:
-            # 文件不存在，初始化为空列表
-            self.data = []
+            # 文件不存在，数据已初始化为空列表
             logger.info("数据文件不存在，初始化为空")
         except json.JSONDecodeError as e:
             # JSON解析错误
-            self.data = []
             logger.error(f"JSON解析错误: {e}")
         except Exception as e:
             # 其他错误
-            self.data = []
             logger.error(f"加载数据失败: {e}")
 
     def _save_data(self):
         """保存记账数据"""
         try:
+            # 确保数据是列表类型
+            if not isinstance(self.data, list):
+                logger.warning("数据不是列表类型，重置为空列表")
+                self.data = []
+                
             with open(self.data_file, "w", encoding="utf-8") as f:
                 json.dump(self.data, f, ensure_ascii=False, indent=4)
             logger.info(f"成功保存 {len(self.data)} 条记录")
@@ -122,6 +136,12 @@ class AccountBookPlugin(Star):
             "category": category,
             "amount": amount
         }
+        
+        # 确保数据是列表类型
+        if not isinstance(self.data, list):
+            logger.warning("数据不是列表类型，重置为空列表")
+            self.data = []
+            
         self.data.append(new_record)
         self._save_data()
         
@@ -147,13 +167,17 @@ class AccountBookPlugin(Star):
         total_income = 0
         income_list = []
         
+        # 确保数据是列表类型
+        if not isinstance(self.data, list):
+            return MessageEventResult(plain_text="📊数据格式错误，无法查询")
+        
         for record in self.data:
             try:
                 record_date = datetime.strptime(record["date"], "%Y-%m-%d")
                 if record_date == target_date:
-                    total_income += record["amount"]
+                    total_income += float(record["amount"])
                     income_list.append(f"• {record['category']}: {record['amount']}元")
-            except (KeyError, ValueError):
+            except (KeyError, ValueError, TypeError):
                 continue  # 跳过格式错误的记录
         
         if income_list:
@@ -179,13 +203,17 @@ class AccountBookPlugin(Star):
         total_income = 0
         income_list = []
         
+        # 确保数据是列表类型
+        if not isinstance(self.data, list):
+            return MessageEventResult(plain_text="📊数据格式错误，无法查询")
+        
         for record in self.data:
             try:
                 record_date = datetime.strptime(record["date"], "%Y-%m-%d")
                 if start <= record_date <= end:
-                    total_income += record["amount"]
+                    total_income += float(record["amount"])
                     income_list.append(f"• {record['date']} {record['category']}: {record['amount']}元")
-            except (KeyError, ValueError):
+            except (KeyError, ValueError, TypeError):
                 continue  # 跳过格式错误的记录
         
         if income_list:
@@ -217,13 +245,17 @@ class AccountBookPlugin(Star):
         total_income = 0
         income_list = []
         
+        # 确保数据是列表类型
+        if not isinstance(self.data, list):
+            return MessageEventResult(plain_text="📊数据格式错误，无法查询")
+        
         for record in self.data:
             try:
                 record_date = datetime.strptime(record["date"], "%Y-%m-%d")
                 if start <= record_date <= end:
-                    total_income += record["amount"]
+                    total_income += float(record["amount"])
                     income_list.append(f"• {record['date']} {record['category']}: {record['amount']}元")
-            except (KeyError, ValueError):
+            except (KeyError, ValueError, TypeError):
                 continue  # 跳过格式错误的记录
         
         if income_list:
@@ -250,13 +282,17 @@ class AccountBookPlugin(Star):
         total_income = 0
         income_list = []
         
+        # 确保数据是列表类型
+        if not isinstance(self.data, list):
+            return MessageEventResult(plain_text="📊数据格式错误，无法查询")
+        
         for record in self.data:
             try:
                 record_date = datetime.strptime(record["date"], "%Y-%m-%d")
                 if start <= record_date <= end:
-                    total_income += record["amount"]
+                    total_income += float(record["amount"])
                     income_list.append(f"• {record['date'][:7]} {record['category']}: {record['amount']}元")
-            except (KeyError, ValueError):
+            except (KeyError, ValueError, TypeError):
                 continue  # 跳过格式错误的记录
         
         if income_list:
@@ -269,7 +305,8 @@ class AccountBookPlugin(Star):
     @filter.command("ls")
     async def list_categories(self, event: AstrMessageEvent):
         """列出所有收入类目及详细统计"""
-        if not self.data:
+        # 确保数据是列表类型
+        if not isinstance(self.data, list) or not self.data:
             return MessageEventResult(plain_text="📊暂无收入记录")
         
         # 按类目统计总收入
@@ -278,9 +315,10 @@ class AccountBookPlugin(Star):
             if not isinstance(record, dict):
                 continue  # 跳过非字典类型的记录
             try:
-                cat = record["category"]
-                categories[cat] = categories.get(cat, 0) + float(record["amount"])
-            except (KeyError, TypeError, ValueError):
+                cat = record.get("category", "未分类")
+                amount = float(record.get("amount", 0))
+                categories[cat] = categories.get(cat, 0) + amount
+            except (TypeError, ValueError):
                 continue  # 跳过格式错误的记录
         
         if not categories:
@@ -307,7 +345,8 @@ class AccountBookPlugin(Star):
     @filter.command("lsd")
     async def list_categories_detail(self, event: AstrMessageEvent):
         """按类目详细统计收入"""
-        if not self.data:
+        # 确保数据是列表类型
+        if not isinstance(self.data, list) or not self.data:
             return MessageEventResult(plain_text="📊暂无收入记录")
         
         # 按类目分组
@@ -316,11 +355,11 @@ class AccountBookPlugin(Star):
             if not isinstance(record, dict):
                 continue  # 跳过非字典类型的记录
             try:
-                cat = record["category"]
+                cat = record.get("category", "未分类")
                 if cat not in category_data:
                     category_data[cat] = []
                 category_data[cat].append(record)
-            except KeyError:
+            except (KeyError, TypeError):
                 continue  # 跳过格式错误的记录
         
         if not category_data:
@@ -335,22 +374,25 @@ class AccountBookPlugin(Star):
             # 按日期排序
             sorted_records = sorted(records, key=lambda x: x.get("date", ""))
             for r in sorted_records:
-                if isinstance(r, dict) and "date" in r and "amount" in r:
-                    result += f"  • {r['date']}: {float(r['amount']):.2f}元\n"
+                if isinstance(r, dict):
+                    date = r.get("date", "未知日期")
+                    amount = float(r.get("amount", 0))
+                    result += f"  • {date}: {amount:.2f}元\n"
         
         return MessageEventResult(plain_text=result)
 
     @filter.command("lst")
     async def total_income(self, event: AstrMessageEvent):
         """计算总收入"""
-        if not self.data:
+        # 确保数据是列表类型
+        if not isinstance(self.data, list) or not self.data:
             return MessageEventResult(plain_text="📊暂无收入记录")
         
         total = 0
         for record in self.data:
-            if isinstance(record, dict) and "amount" in record:
+            if isinstance(record, dict):
                 try:
-                    total += float(record["amount"])
+                    total += float(record.get("amount", 0))
                 except (ValueError, TypeError):
                     continue  # 跳过无效的金额值
         
