@@ -8,8 +8,8 @@ import os
 @register("account_book", "YourName", "一个简单的记账本插件", "1.0.0")
 class AccountBookPlugin(Star):
     def __init__(self, context: Context):
-        # 初始化数据结构为安全的空列表
-        self.data = []
+        # 使用更具体的属性名，避免与基类冲突
+        self._account_data = []
         
         # 调用基类初始化
         super().__init__(context)
@@ -21,15 +21,17 @@ class AccountBookPlugin(Star):
         data_dir = os.path.dirname(self.data_file)
         os.makedirs(data_dir, exist_ok=True)
         
-        # 加载数据
-        self._load_data()
+        # 延迟加载数据，避免基类初始化过程中访问
+        self._delayed_initialization = True
 
     def _load_data(self):
         """加载并验证记账数据"""
-        try:
-            # 重置数据为安全的空列表
-            self.data = []
+        # 检查是否需要延迟初始化
+        if hasattr(self, '_delayed_initialization'):
+            self._account_data = []
+            delattr(self, '_delayed_initialization')
             
+        try:
             # 尝试加载数据文件
             with open(self.data_file, "r", encoding="utf-8") as f:
                 raw_data = json.load(f)
@@ -69,8 +71,8 @@ class AccountBookPlugin(Star):
                     valid_records.append(item)
                 
                 # 安全地更新数据
-                self.data = valid_records
-                logger.info(f"成功加载 {len(self.data)} 条有效记录")
+                self._account_data = valid_records
+                logger.info(f"成功加载 {len(self._account_data)} 条有效记录")
                 
         except FileNotFoundError:
             # 文件不存在，数据已初始化为空列表
@@ -86,13 +88,13 @@ class AccountBookPlugin(Star):
         """保存记账数据"""
         try:
             # 确保数据是列表类型
-            if not isinstance(self.data, list):
+            if not isinstance(self._account_data, list):
                 logger.warning("数据不是列表类型，重置为空列表")
-                self.data = []
+                self._account_data = []
                 
             with open(self.data_file, "w", encoding="utf-8") as f:
-                json.dump(self.data, f, ensure_ascii=False, indent=4)
-            logger.info(f"成功保存 {len(self.data)} 条记录")
+                json.dump(self._account_data, f, ensure_ascii=False, indent=4)
+            logger.info(f"成功保存 {len(self._account_data)} 条记录")
         except Exception as e:
             logger.error(f"保存数据失败: {e}")
 
@@ -104,6 +106,10 @@ class AccountBookPlugin(Star):
             /+ 类目 金额          # 自动记录当前日期
             /+ 类目 金额 日期    # 指定日期(格式:YYYY-MM-DD)
         """
+        # 确保数据已加载
+        if hasattr(self, '_delayed_initialization'):
+            self._load_data()
+            
         # 验证参数数量
         if len(args) < 2:
             return MessageEventResult(plain_text="❌错误：请提供类目和金额！\n示例：/+ 工资 5000")
@@ -138,11 +144,11 @@ class AccountBookPlugin(Star):
         }
         
         # 确保数据是列表类型
-        if not isinstance(self.data, list):
+        if not isinstance(self._account_data, list):
             logger.warning("数据不是列表类型，重置为空列表")
-            self.data = []
+            self._account_data = []
             
-        self.data.append(new_record)
+        self._account_data.append(new_record)
         self._save_data()
         
         return MessageEventResult(plain_text=f"✅成功添加收入：{category} {amount}元 ({date})")
@@ -159,6 +165,10 @@ class AccountBookPlugin(Star):
         Args:
             date (str): 日期，格式为YYYY-MM-DD
         """
+        # 确保数据已加载
+        if hasattr(self, '_delayed_initialization'):
+            self._load_data()
+            
         try:
             target_date = datetime.strptime(date, "%Y-%m-%d")
         except ValueError:
@@ -168,10 +178,10 @@ class AccountBookPlugin(Star):
         income_list = []
         
         # 确保数据是列表类型
-        if not isinstance(self.data, list):
+        if not isinstance(self._account_data, list):
             return MessageEventResult(plain_text="📊数据格式错误，无法查询")
         
-        for record in self.data:
+        for record in self._account_data:
             try:
                 record_date = datetime.strptime(record["date"], "%Y-%m-%d")
                 if record_date == target_date:
@@ -194,6 +204,10 @@ class AccountBookPlugin(Star):
         Args:
             start_date (str): 本周起始日期，格式为YYYY-MM-DD
         """
+        # 确保数据已加载
+        if hasattr(self, '_delayed_initialization'):
+            self._load_data()
+            
         try:
             start = datetime.strptime(start_date, "%Y-%m-%d")
             end = start + timedelta(days=6)
@@ -204,10 +218,10 @@ class AccountBookPlugin(Star):
         income_list = []
         
         # 确保数据是列表类型
-        if not isinstance(self.data, list):
+        if not isinstance(self._account_data, list):
             return MessageEventResult(plain_text="📊数据格式错误，无法查询")
         
-        for record in self.data:
+        for record in self._account_data:
             try:
                 record_date = datetime.strptime(record["date"], "%Y-%m-%d")
                 if start <= record_date <= end:
@@ -230,6 +244,10 @@ class AccountBookPlugin(Star):
         Args:
             month (str): 月份，格式为YYYY-MM
         """
+        # 确保数据已加载
+        if hasattr(self, '_delayed_initialization'):
+            self._load_data()
+            
         try:
             target_month = datetime.strptime(month, "%Y-%m")
             start = target_month.replace(day=1)
@@ -246,10 +264,10 @@ class AccountBookPlugin(Star):
         income_list = []
         
         # 确保数据是列表类型
-        if not isinstance(self.data, list):
+        if not isinstance(self._account_data, list):
             return MessageEventResult(plain_text="📊数据格式错误，无法查询")
         
-        for record in self.data:
+        for record in self._account_data:
             try:
                 record_date = datetime.strptime(record["date"], "%Y-%m-%d")
                 if start <= record_date <= end:
@@ -272,6 +290,10 @@ class AccountBookPlugin(Star):
         Args:
             year (str): 年份，格式为YYYY
         """
+        # 确保数据已加载
+        if hasattr(self, '_delayed_initialization'):
+            self._load_data()
+            
         try:
             target_year = datetime.strptime(year, "%Y")
             start = target_year.replace(month=1, day=1)
@@ -283,10 +305,10 @@ class AccountBookPlugin(Star):
         income_list = []
         
         # 确保数据是列表类型
-        if not isinstance(self.data, list):
+        if not isinstance(self._account_data, list):
             return MessageEventResult(plain_text="📊数据格式错误，无法查询")
         
-        for record in self.data:
+        for record in self._account_data:
             try:
                 record_date = datetime.strptime(record["date"], "%Y-%m-%d")
                 if start <= record_date <= end:
@@ -305,13 +327,17 @@ class AccountBookPlugin(Star):
     @filter.command("ls")
     async def list_categories(self, event: AstrMessageEvent):
         """列出所有收入类目及详细统计"""
+        # 确保数据已加载
+        if hasattr(self, '_delayed_initialization'):
+            self._load_data()
+            
         # 确保数据是列表类型
-        if not isinstance(self.data, list) or not self.data:
+        if not isinstance(self._account_data, list) or not self._account_data:
             return MessageEventResult(plain_text="📊暂无收入记录")
         
         # 按类目统计总收入
         categories = {}
-        for record in self.data:
+        for record in self._account_data:
             if not isinstance(record, dict):
                 continue  # 跳过非字典类型的记录
             try:
@@ -345,13 +371,17 @@ class AccountBookPlugin(Star):
     @filter.command("lsd")
     async def list_categories_detail(self, event: AstrMessageEvent):
         """按类目详细统计收入"""
+        # 确保数据已加载
+        if hasattr(self, '_delayed_initialization'):
+            self._load_data()
+            
         # 确保数据是列表类型
-        if not isinstance(self.data, list) or not self.data:
+        if not isinstance(self._account_data, list) or not self._account_data:
             return MessageEventResult(plain_text="📊暂无收入记录")
         
         # 按类目分组
         category_data = {}
-        for record in self.data:
+        for record in self._account_data:
             if not isinstance(record, dict):
                 continue  # 跳过非字典类型的记录
             try:
@@ -384,12 +414,16 @@ class AccountBookPlugin(Star):
     @filter.command("lst")
     async def total_income(self, event: AstrMessageEvent):
         """计算总收入"""
+        # 确保数据已加载
+        if hasattr(self, '_delayed_initialization'):
+            self._load_data()
+            
         # 确保数据是列表类型
-        if not isinstance(self.data, list) or not self.data:
+        if not isinstance(self._account_data, list) or not self._account_data:
             return MessageEventResult(plain_text="📊暂无收入记录")
         
         total = 0
-        for record in self.data:
+        for record in self._account_data:
             if isinstance(record, dict):
                 try:
                     total += float(record.get("amount", 0))
