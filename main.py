@@ -3,12 +3,15 @@ from astrbot.api.star import Context, Star, register
 from astrbot.api import logger
 import json
 from datetime import datetime, timedelta
+import os
 
 @register("account_book", "YourName", "一个简单的记账本插件", "1.0.0")
 class AccountBookPlugin(Star):
     def __init__(self, context: Context):
         super().__init__(context)
-        self.data_file = "data/account_book_data.json"
+        # 确保数据目录存在
+        data_dir = os.path.dirname(self.data_file)
+        os.makedirs(data_dir, exist_ok=True)
         self._load_data()
 
     def _load_data(self):
@@ -18,14 +21,21 @@ class AccountBookPlugin(Star):
                 self.data = json.load(f)
                 # 确保数据是列表类型
                 if not isinstance(self.data, list):
+                    logger.warning("数据格式错误，期望列表，重置为空列表")
                     self.data = []
         except FileNotFoundError:
-            self.data = []  # 初始化为空列表
+            self.data = []
+        except Exception as e:
+            logger.error(f"加载数据失败: {e}")
+            self.data = []
 
     def _save_data(self):
         """保存记账数据"""
-        with open(self.data_file, "w", encoding="utf-8") as f:
-            json.dump(self.data, f, ensure_ascii=False, indent=4)
+        try:
+            with open(self.data_file, "w", encoding="utf-8") as f:
+                json.dump(self.data, f, ensure_ascii=False, indent=4)
+        except Exception as e:
+            logger.error(f"保存数据失败: {e}")
 
     @filter.command("+")
     async def add_income(self, event: AstrMessageEvent, *args):
@@ -39,32 +49,38 @@ class AccountBookPlugin(Star):
         if len(args) < 2:
             return MessageEventResult(plain_text="❌错误：请提供类目和金额！\n示例：/+ 工资 5000")
         
-        类目 = args[0]
-        金额 = args[1]
+        category = args[0]
+        amount = args[1]
         
         # 验证金额是否为有效数字
         try:
-            金额 = float(金额)
-            if 金额 <= 0:
+            amount = float(amount)
+            if amount <= 0:
                 raise ValueError("金额必须大于0")
         except ValueError as e:
             return MessageEventResult(plain_text=f"❌错误：金额必须是大于0的数字！({e})")
         
         # 处理可选的日期参数
         if len(args) >= 3:
-            日期 = args[2]
+            date = args[2]
             try:
-                datetime.strptime(日期, "%Y-%m-%d")
+                datetime.strptime(date, "%Y-%m-%d")
             except ValueError:
                 return MessageEventResult(plain_text="❌日期格式错误，请使用YYYY-MM-DD格式")
         else:
             # 没有提供日期时，自动记录当前日期
-            日期 = datetime.now().strftime("%Y-%m-%d")
+            date = datetime.now().strftime("%Y-%m-%d")
         
-        self.data.append({"date": 日期, "category": 类目, "amount": 金额})
+        # 创建并添加新记录
+        new_record = {
+            "date": date,
+            "category": category,
+            "amount": amount
+        }
+        self.data.append(new_record)
         self._save_data()
         
-        return MessageEventResult(plain_text=f"✅成功添加收入：{类目} {金额}元 ({日期})")
+        return MessageEventResult(plain_text=f"✅成功添加收入：{category} {amount}元 ({date})")
 
     @filter.command_group("查询收入")
     def query_income_group(self):
@@ -72,14 +88,14 @@ class AccountBookPlugin(Star):
         pass
 
     @query_income_group.command("t")
-    async def query_income_by_day(self, event: AstrMessageEvent, 日期: str):
+    async def query_income_by_day(self, event: AstrMessageEvent, date: str):
         """按天查询收入
         
         Args:
-            日期 (str): 日期，格式为YYYY-MM-DD
+            date (str): 日期，格式为YYYY-MM-DD
         """
         try:
-            target_date = datetime.strptime(日期, "%Y-%m-%d")
+            target_date = datetime.strptime(date, "%Y-%m-%d")
         except ValueError:
             return MessageEventResult(plain_text="❌日期格式错误，请使用YYYY-MM-DD格式")
         
@@ -87,27 +103,30 @@ class AccountBookPlugin(Star):
         income_list = []
         
         for record in self.data:
-            record_date = datetime.strptime(record["date"], "%Y-%m-%d")
-            if record_date == target_date:
-                total_income += record["amount"]
-                income_list.append(f"• {record['category']}: {record['amount']}元")
+            try:
+                record_date = datetime.strptime(record["date"], "%Y-%m-%d")
+                if record_date == target_date:
+                    total_income += record["amount"]
+                    income_list.append(f"• {record['category']}: {record['amount']}元")
+            except (KeyError, ValueError):
+                continue  # 跳过格式错误的记录
         
         if income_list:
-            result = f"📅{日期}收入总计: {total_income}元\n" + "\n".join(income_list)
+            result = f"📅{date}收入总计: {total_income}元\n" + "\n".join(income_list)
         else:
-            result = f"📅{日期}没有收入记录"
+            result = f"📅{date}没有收入记录"
             
         return MessageEventResult(plain_text=result)
 
     @query_income_group.command("z")
-    async def query_income_by_week(self, event: AstrMessageEvent, 起始日期: str):
+    async def query_income_by_week(self, event: AstrMessageEvent, start_date: str):
         """按周查询收入
         
         Args:
-            起始日期 (str): 本周起始日期，格式为YYYY-MM-DD
+            start_date (str): 本周起始日期，格式为YYYY-MM-DD
         """
         try:
-            start = datetime.strptime(起始日期, "%Y-%m-%d")
+            start = datetime.strptime(start_date, "%Y-%m-%d")
             end = start + timedelta(days=6)
         except ValueError:
             return MessageEventResult(plain_text="❌日期格式错误，请使用YYYY-MM-DD格式")
@@ -116,27 +135,30 @@ class AccountBookPlugin(Star):
         income_list = []
         
         for record in self.data:
-            record_date = datetime.strptime(record["date"], "%Y-%m-%d")
-            if start <= record_date <= end:
-                total_income += record["amount"]
-                income_list.append(f"• {record['date']} {record['category']}: {record['amount']}元")
+            try:
+                record_date = datetime.strptime(record["date"], "%Y-%m-%d")
+                if start <= record_date <= end:
+                    total_income += record["amount"]
+                    income_list.append(f"• {record['date']} {record['category']}: {record['amount']}元")
+            except (KeyError, ValueError):
+                continue  # 跳过格式错误的记录
         
         if income_list:
-            result = f"📅{起始日期}~{end.strftime('%Y-%m-%d')}收入总计: {total_income}元\n" + "\n".join(income_list)
+            result = f"📅{start_date}~{end.strftime('%Y-%m-%d')}收入总计: {total_income}元\n" + "\n".join(income_list)
         else:
-            result = f"📅{起始日期}~{end.strftime('%Y-%m-%d')}没有收入记录"
+            result = f"📅{start_date}~{end.strftime('%Y-%m-%d')}没有收入记录"
             
         return MessageEventResult(plain_text=result)
 
     @query_income_group.command("y")
-    async def query_income_by_month(self, event: AstrMessageEvent, 月份: str):
+    async def query_income_by_month(self, event: AstrMessageEvent, month: str):
         """按月查询收入
         
         Args:
-            月份 (str): 月份，格式为YYYY-MM
+            month (str): 月份，格式为YYYY-MM
         """
         try:
-            target_month = datetime.strptime(月份, "%Y-%m")
+            target_month = datetime.strptime(month, "%Y-%m")
             start = target_month.replace(day=1)
             
             if target_month.month == 12:
@@ -151,27 +173,30 @@ class AccountBookPlugin(Star):
         income_list = []
         
         for record in self.data:
-            record_date = datetime.strptime(record["date"], "%Y-%m-%d")
-            if start <= record_date <= end:
-                total_income += record["amount"]
-                income_list.append(f"• {record['date']} {record['category']}: {record['amount']}元")
+            try:
+                record_date = datetime.strptime(record["date"], "%Y-%m-%d")
+                if start <= record_date <= end:
+                    total_income += record["amount"]
+                    income_list.append(f"• {record['date']} {record['category']}: {record['amount']}元")
+            except (KeyError, ValueError):
+                continue  # 跳过格式错误的记录
         
         if income_list:
-            result = f"📅{月份}收入总计: {total_income}元\n" + "\n".join(income_list)
+            result = f"📅{month}收入总计: {total_income}元\n" + "\n".join(income_list)
         else:
-            result = f"📅{月份}没有收入记录"
+            result = f"📅{month}没有收入记录"
             
         return MessageEventResult(plain_text=result)
 
     @query_income_group.command("++")
-    async def query_income_by_year(self, event: AstrMessageEvent, 年份: str):
+    async def query_income_by_year(self, event: AstrMessageEvent, year: str):
         """按年查询收入
         
         Args:
-            年份 (str): 年份，格式为YYYY
+            year (str): 年份，格式为YYYY
         """
         try:
-            target_year = datetime.strptime(年份, "%Y")
+            target_year = datetime.strptime(year, "%Y")
             start = target_year.replace(month=1, day=1)
             end = target_year.replace(year=target_year.year + 1, month=1, day=1) - timedelta(days=1)
         except ValueError:
@@ -181,15 +206,18 @@ class AccountBookPlugin(Star):
         income_list = []
         
         for record in self.data:
-            record_date = datetime.strptime(record["date"], "%Y-%m-%d")
-            if start <= record_date <= end:
-                total_income += record["amount"]
-                income_list.append(f"• {record['date'][:7]} {record['category']}: {record['amount']}元")
+            try:
+                record_date = datetime.strptime(record["date"], "%Y-%m-%d")
+                if start <= record_date <= end:
+                    total_income += record["amount"]
+                    income_list.append(f"• {record['date'][:7]} {record['category']}: {record['amount']}元")
+            except (KeyError, ValueError):
+                continue  # 跳过格式错误的记录
         
         if income_list:
-            result = f"📅{年份}收入总计: {total_income}元\n" + "\n".join(income_list)
+            result = f"📅{year}收入总计: {total_income}元\n" + "\n".join(income_list)
         else:
-            result = f"📅{年份}没有收入记录"
+            result = f"📅{year}没有收入记录"
             
         return MessageEventResult(plain_text=result)
 
@@ -202,8 +230,14 @@ class AccountBookPlugin(Star):
         # 按类目统计总收入
         categories = {}
         for record in self.data:
-            cat = record["category"]
-            categories[cat] = categories.get(cat, 0) + record["amount"]
+            try:
+                cat = record["category"]
+                categories[cat] = categories.get(cat, 0) + record["amount"]
+            except (KeyError, TypeError):
+                continue  # 跳过格式错误的记录
+        
+        if not categories:
+            return MessageEventResult(plain_text="📊暂无有效收入记录")
         
         # 计算总收入
         total = sum(categories.values())
@@ -232,10 +266,16 @@ class AccountBookPlugin(Star):
         # 按类目分组
         category_data = {}
         for record in self.data:
-            cat = record["category"]
-            if cat not in category_data:
-                category_data[cat] = []
-            category_data[cat].append(record)
+            try:
+                cat = record["category"]
+                if cat not in category_data:
+                    category_data[cat] = []
+                category_data[cat].append(record)
+            except KeyError:
+                continue  # 跳过格式错误的记录
+        
+        if not category_data:
+            return MessageEventResult(plain_text="📊暂无有效收入记录")
         
         # 生成详细统计
         result = "📊收入类目详细统计\n"
@@ -256,7 +296,8 @@ class AccountBookPlugin(Star):
         if not self.data:
             return MessageEventResult(plain_text="📊暂无收入记录")
         
-        total = sum(record["amount"] for record in self.data)
+        total = sum(record.get("amount", 0) for record in self.data)
+        
         return MessageEventResult(plain_text=f"📊总收入: {total}元")
 
     @filter.command("help")
