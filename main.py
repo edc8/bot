@@ -21,9 +21,6 @@ class AccountingPlugin(Star):
         # 加载已保存的数据
         self.load_data()
         
-        # 支持的货币类型
-        self.supported_currencies = ["CNY", "USD", "EUR"]
-        
         # 默认账本名称
         self.default_book_name = "默认账本"
 
@@ -38,26 +35,27 @@ class AccountingPlugin(Star):
         help_text = (
             "📊 记账机器人帮助\n"
             "====================\n"
-            "/ac add [金额] [分类] [备注(可选)] - 添加一笔支出\n"
-            "/ac income [金额] [来源] [备注(可选)] - 添加一笔收入\n"
-            "/ac list - 查看最近的记账记录\n"
-            "/ac summary - 查看账本汇总信息\n"
-            "/ac category - 查看所有支出分类\n"
-            "/ac delete [记录ID] - 删除指定记录\n"
-            "/ac book create [账本名称] - 创建新账本\n"
-            "/ac book switch [账本名称] - 切换当前账本\n"
-            "/ac book list - 列出所有账本\n"
-            "/ac help - 显示本帮助\n"
+            "/ac 记 [金额] [分类] [备注(可选)] - 添加支出\n"
+            "/ac 收 [金额] [来源] [备注(可选)] - 添加收入\n"
+            "/ac 记 [金额] [+分类] [备注(可选)] - 添加收入（+号开头的分类视为收入）\n"
+            "/ac 查 - 查看最近10条记录\n"
+            "/ac 汇总 - 查看账本汇总信息\n"
+            "/ac 分类 - 查看支出分类统计\n"
+            "/ac 删 [记录ID] - 删除记录\n"
+            "/ac 账本 新建 [名称] - 创建新账本\n"
+            "/ac 账本 切换 [名称] - 切换账本\n"
+            "/ac 账本 列表 - 查看所有账本\n"
+            "/ac 帮助 - 显示本帮助\n"
             "====================\n"
             "示例:\n"
-            "/ac add 25 餐饮 午餐\n"
-            "/ac income 5000 工资 6月工资"
+            "/ac 记 25 餐饮 午餐\n"
+            "/ac 收 5000 工资 6月工资"
         )
         yield event.plain_result(help_text)
 
-    @accounting.command("add")
-    async def add_expense(self, event: AstrMessageEvent, amount: str, category: str, note: str = ""):
-        """添加支出记录"""
+    @accounting.command("记")
+    async def record(self, event: AstrMessageEvent, amount: str, category: str, note: str = ""):
+        """记录收支"""
         user_id = event.get_sender_id()
         book_name = self.get_current_book_name(user_id)
         
@@ -69,36 +67,15 @@ class AccountingPlugin(Star):
             yield event.plain_result(f"错误: {str(e)}")
             return
         
-        # 记录时间戳
-        timestamp = int(time.time())
-        
-        # 创建记录
-        record_id = self.generate_record_id(user_id, book_name)
-        record = {
-            "id": record_id,
-            "type": "expense",
-            "amount": amount_value,
-            "category": category,
-            "note": note,
-            "timestamp": timestamp
-        }
-        
-        # 添加到账本
-        self.add_record(user_id, book_name, record)
-        
-        # 保存数据
-        self.save_data()
-        
-        # 返回确认信息
-        time_str = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(timestamp))
-        yield event.plain_result(f"📝 支出记录已添加\n"
-                                f"金额: {amount_value}\n"
-                                f"分类: {category}\n"
-                                f"备注: {note if note else '无'}\n"
-                                f"时间: {time_str}\n"
-                                f"账本: {book_name}")
+        # 判断是收入还是支出
+        is_income = category.startswith('+')
+        if is_income:
+            category = category[1:]  # 移除加号
+            await self.add_income(event, amount, category, note)
+        else:
+            await self.add_expense(event, amount, category, note)
 
-    @accounting.command("income")
+    @accounting.command("收")
     async def add_income(self, event: AstrMessageEvent, amount: str, source: str, note: str = ""):
         """添加收入记录"""
         user_id = event.get_sender_id()
@@ -141,18 +118,13 @@ class AccountingPlugin(Star):
                                 f"时间: {time_str}\n"
                                 f"账本: {book_name}")
 
-    @accounting.command("list")
-    async def list_records(self, event: AstrMessageEvent, count: str = "10"):
+    @accounting.command("查")
+    async def list_records(self, event: AstrMessageEvent):
         """查看最近的记账记录"""
         user_id = event.get_sender_id()
         book_name = self.get_current_book_name(user_id)
         
-        try:
-            count_value = int(count)
-            if count_value <= 0:
-                count_value = 10
-        except ValueError:
-            count_value = 10
+        count_value = 10
         
         # 获取账本
         book = self.get_user_book(user_id, book_name)
@@ -185,7 +157,7 @@ class AccountingPlugin(Star):
         
         yield event.plain_result(output)
 
-    @accounting.command("summary")
+    @accounting.command("汇总")
     async def show_summary(self, event: AstrMessageEvent):
         """查看账本汇总信息"""
         user_id = event.get_sender_id()
@@ -223,15 +195,17 @@ class AccountingPlugin(Star):
         
         if sorted_categories:
             output += "📊 支出分类统计:\n"
-            for category, amount in sorted_categories:
+            for category, amount in sorted_categories[:5]:  # 只显示前5个分类
                 percentage = (amount / total_expense) * 100 if total_expense > 0 else 0
                 output += f"• {category}: {amount} ({percentage:.1f}%)\n"
+            if len(sorted_categories) > 5:
+                output += f"• ...等{len(sorted_categories)}个分类\n"
         
         yield event.plain_result(output)
 
-    @accounting.command("category")
-    async def list_categories(self, event: AstrMessageEvent):
-        """查看所有支出分类"""
+    @accounting.command("分类")
+    async def show_categories(self, event: AstrMessageEvent):
+        """查看支出分类统计"""
         user_id = event.get_sender_id()
         book_name = self.get_current_book_name(user_id)
         
@@ -239,23 +213,31 @@ class AccountingPlugin(Star):
         book = self.get_user_book(user_id, book_name)
         records = book.get("records", [])
         
-        # 收集所有支出分类
-        categories = set()
+        # 按分类统计支出
+        category_stats = {}
         for record in records:
             if record["type"] == "expense":
-                categories.add(record["category"])
+                category = record["category"]
+                category_stats[category] = category_stats.get(category, 0) + record["amount"]
         
-        if not categories:
-            yield event.plain_result(f"📒 账本 '{book_name}' 中没有支出记录")
-            return
+        # 按金额排序
+        sorted_categories = sorted(category_stats.items(), key=lambda x: x[1], reverse=True)
         
         # 构建输出
-        output = f"📂 账本 '{book_name}' 的支出分类 ({len(categories)}):\n"
-        output += "\n".join(f"• {category}" for category in sorted(categories))
+        output = f"📊 账本 '{book_name}' 支出分类统计:\n"
+        
+        if not sorted_categories:
+            output += "暂无支出记录\n"
+        else:
+            for category, amount in sorted_categories[:5]:  # 只显示前5个分类
+                percentage = (amount / sum(category_stats.values())) * 100
+                output += f"• {category}: {amount} ({percentage:.1f}%)\n"
+            if len(sorted_categories) > 5:
+                output += f"• ...等{len(sorted_categories)}个分类\n"
         
         yield event.plain_result(output)
 
-    @accounting.command("delete")
+    @accounting.command("删")
     async def delete_record(self, event: AstrMessageEvent, record_id: str):
         """删除指定记录"""
         user_id = event.get_sender_id()
@@ -290,12 +272,12 @@ class AccountingPlugin(Star):
                                 f"金额: {deleted_record['amount']}\n"
                                 f"时间: {time_str}")
 
-    @accounting.command("book")
+    @accounting.command("账本")
     async def book_management(self, event: AstrMessageEvent, subcommand: str = "", *args):
         """账本管理命令"""
         user_id = event.get_sender_id()
         
-        if subcommand == "create":
+        if subcommand == "新建":
             # 创建新账本
             if not args:
                 yield event.plain_result("❌ 请指定账本名称")
@@ -315,7 +297,7 @@ class AccountingPlugin(Star):
             
             yield event.plain_result(f"✅ 账本 '{book_name}' 创建成功")
             
-        elif subcommand == "switch":
+        elif subcommand == "切换":
             # 切换当前账本
             if not args:
                 yield event.plain_result("❌ 请指定账本名称")
@@ -335,7 +317,7 @@ class AccountingPlugin(Star):
             
             yield event.plain_result(f"✅ 已切换到账本 '{book_name}'")
             
-        elif subcommand == "list":
+        elif subcommand == "列表":
             # 列出所有账本
             books = self.get_user_books(user_id)
             current_book = self.get_current_book_name(user_id)
@@ -352,7 +334,7 @@ class AccountingPlugin(Star):
             yield event.plain_result(output)
             
         else:
-            yield event.plain_result("❌ 未知的账本子命令。可用: create, switch, list")
+            yield event.plain_result("❌ 未知的账本子命令。可用: 新建, 切换, 列表")
 
     # ===== 辅助方法 =====
     
@@ -418,7 +400,6 @@ class AccountingPlugin(Star):
 
     def generate_record_id(self, user_id: str, book_name: str) -> str:
         """生成唯一记录ID"""
-        # 使用时间戳和随机数生成唯一ID
         import uuid
         return str(uuid.uuid4())[:8]
 
