@@ -8,27 +8,27 @@ import os
 @register("account_book", "YourName", "一个简单的记账本插件", "1.0.0")
 class AccountBookPlugin(Star):
     def __init__(self, context: Context):
+        # 初始化数据结构为安全的空列表
+        self.data = []
+        
+        # 调用基类初始化
         super().__init__(context)
+        
+        # 设置数据文件路径
         self.data_file = "data/account_book_data.json"
+        
         # 确保数据目录存在
         data_dir = os.path.dirname(self.data_file)
         os.makedirs(data_dir, exist_ok=True)
         
-        # 初始化数据为安全的空列表
-        self._initialize_data()
-        
         # 加载数据
         self._load_data()
-
-    def _initialize_data(self):
-        """初始化数据结构为安全的空列表"""
-        self.data = []
 
     def _load_data(self):
         """加载并验证记账数据"""
         try:
             # 重置数据为安全的空列表
-            self._initialize_data()
+            self.data = []
             
             # 尝试加载数据文件
             with open(self.data_file, "r", encoding="utf-8") as f:
