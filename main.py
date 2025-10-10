@@ -8,7 +8,6 @@ import time
 import uuid
 
 
-# 保持正确的注册参数
 @register(
     "accounting",  # 插件名称
     "anchor",      # 作者
@@ -27,10 +26,8 @@ class AccountingPlugin(Star):
         self._load_accounting_data()
         self._load_aa_data()
 
-    # 修复核心：移除_empty()方法或确保它不接受参数
-    # 如果你的框架需要这个方法，请按以下方式定义
-    def _empty(self):
-        """空方法，不接受任何参数"""
+    def _empty(self, *args, **kwargs):
+        """兼容性空方法"""
         pass
 
     # ---------------------- 主指令组 ----------------------
