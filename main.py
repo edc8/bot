@@ -1,4 +1,4 @@
-from astrbot.api.event import filter, AstrMessageEvent, MessageEventResult
+from astrbot.api.event import filter, AstrMessageEvent
 from astrbot.api.star import Context, Star, register
 from astrbot.api import logger
 from typing import Dict, List, Optional, Union
@@ -8,14 +8,13 @@ import time
 import uuid
 
 
-# 补充插件仓库地址与文档链接（解决地址缺失问题）
 @register(
-    plugin_name="accounting",
+    name="accounting",  # 修复参数：将plugin_name改为name
     author="anchor",
     description="简单记账机器人（含极简AA分账：/ac aa 参与人 金额 一步完成）",
-    version="1.3.1",
-    repo_url="https://github.com/anchorAnc/astrbot-plugin-accounting",  # GitHub仓库地址
-    docs_url="https://github.com/anchorAnc/astrbot-plugin-accounting/blob/main/README.md"  # 文档链接（仓库README）
+    version="1.3.2",
+    repo_url="https://github.com/anchorAnc/astrbot-plugin-accounting",
+    docs_url="https://github.com/anchorAnc/astrbot-plugin-accounting/blob/main/README.md"
 )
 class AccountingPlugin(Star):
     def __init__(self, context: Context):
@@ -35,12 +34,12 @@ class AccountingPlugin(Star):
         """记账主指令组"""
         pass
 
-    # ---------------------- 基础记账功能（含文档链接提示） ----------------------
+    # ---------------------- 基础记账功能 ----------------------
     @accounting_main_group.command("help")
     async def show_help(self, event: AstrMessageEvent):
-        """显示帮助（补充文档链接）"""
+        """显示帮助"""
         help_text = (
-            "📊 记账机器人帮助（v1.3.1 · 极简AA版）\n"
+            "📊 记账机器人帮助（v1.3.2 · 修复版）\n"
             "====================\n"
             "【基础记账】\n"
             "/ac + [金额] [来源] [备注] - 加收入（例：/ac + 5000 工资 6月）\n"
@@ -63,7 +62,6 @@ class AccountingPlugin(Star):
         )
         yield event.plain_result(help_text)
 
-    # ---------------------- 以下为原有功能代码（无修改，确保完整性） ----------------------
     @accounting_main_group.command("+")
     async def add_income(self, event: AstrMessageEvent, amount: str, source: str, note: str = ""):
         user_id = event.get_sender_id()
@@ -432,4 +430,4 @@ class AccountingPlugin(Star):
     async def terminate(self):
         self._save_accounting_data()
         self._save_aa_data()
-        logger.info("记账插件（v1.3.1 极简AA版）已卸载，数据已保存")
+        logger.info("记账插件（v1.3.2 修复版）已卸载，数据已保存")
