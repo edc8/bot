@@ -8,12 +8,12 @@ import time
 import uuid
 
 
-# 按要求提供三个必填位置参数：插件名称、作者、描述、版本
+# 保持正确的注册参数
 @register(
     "accounting",  # 插件名称
-    "anchor",      # 作者（第一个必填参数）
-    "简单记账机器人（含极简AA分账功能）",  # 描述（第二个必填参数）
-    "1.3.5"        # 版本（第三个必填参数）
+    "anchor",      # 作者
+    "简单记账机器人（含极简AA分账功能）",  # 描述
+    "1.3.6"        # 版本
 )
 class AccountingPlugin(Star):
     def __init__(self, context: Context):
@@ -27,6 +27,12 @@ class AccountingPlugin(Star):
         self._load_accounting_data()
         self._load_aa_data()
 
+    # 修复核心：移除_empty()方法或确保它不接受参数
+    # 如果你的框架需要这个方法，请按以下方式定义
+    def _empty(self):
+        """空方法，不接受任何参数"""
+        pass
+
     # ---------------------- 主指令组 ----------------------
     @filter.command_group("ac")
     def accounting_main_group(self):
@@ -38,7 +44,7 @@ class AccountingPlugin(Star):
     async def show_help(self, event: AstrMessageEvent):
         """显示帮助"""
         help_text = (
-            "📊 记账机器人帮助（v1.3.5 · 修复版）\n"
+            "📊 记账机器人帮助（v1.3.6 · 修复版）\n"
             "====================\n"
             "【基础记账】\n"
             "/ac + [金额] [来源] [备注] - 加收入（例：/ac + 5000 工资 6月）\n"
@@ -56,8 +62,7 @@ class AccountingPlugin(Star):
             "/ac aa 清账 [ID] - 标记AA账单为已清账（ID从对账获取）\n"
             "====================\n"
             "💡 插件信息：\n"
-            "作者：anchor | 版本：1.3.5\n"
-            "仓库：https://github.com/anchorAnc/astrbot-plugin-accounting"
+            "作者：anchor | 版本：1.3.6"
         )
         yield event.plain_result(help_text)
 
@@ -427,4 +432,4 @@ class AccountingPlugin(Star):
     async def terminate(self):
         self._save_accounting_data()
         self._save_aa_data()
-        logger.info("记账插件（v1.3.5 修复版）已卸载，数据已保存")
+        logger.info("记账插件（v1.3.6 修复版）已卸载，数据已保存")
