@@ -8,12 +8,14 @@ import time
 import uuid
 
 
+# 补充插件仓库地址与文档链接（解决地址缺失问题）
 @register(
     plugin_name="accounting",
     author="anchor",
-    description="简单记账机器人（极简AA分账：/ac aa 参与人1 参与人2 金额）",
-    version="1.3.0",
-    repo_url="https://github.com/anchorAnc/astrbot_plugin_accounting"
+    description="简单记账机器人（含极简AA分账：/ac aa 参与人 金额 一步完成）",
+    version="1.3.1",
+    repo_url="https://github.com/anchorAnc/astrbot-plugin-accounting",  # GitHub仓库地址
+    docs_url="https://github.com/anchorAnc/astrbot-plugin-accounting/blob/main/README.md"  # 文档链接（仓库README）
 )
 class AccountingPlugin(Star):
     def __init__(self, context: Context):
@@ -33,12 +35,12 @@ class AccountingPlugin(Star):
         """记账主指令组"""
         pass
 
-    # ---------------------- 基础记账功能（保留，优化帮助） ----------------------
+    # ---------------------- 基础记账功能（含文档链接提示） ----------------------
     @accounting_main_group.command("help")
     async def show_help(self, event: AstrMessageEvent):
-        """显示帮助（突出极简AA操作）"""
+        """显示帮助（补充文档链接）"""
         help_text = (
-            "📊 记账机器人帮助（v1.3.0 · 极简AA版）\n"
+            "📊 记账机器人帮助（v1.3.1 · 极简AA版）\n"
             "====================\n"
             "【基础记账】\n"
             "/ac + [金额] [来源] [备注] - 加收入（例：/ac + 5000 工资 6月）\n"
@@ -55,10 +57,13 @@ class AccountingPlugin(Star):
             "/ac aa 对账     - 查看所有AA账单（待清账/已清账）\n"
             "/ac aa 清账 [ID] - 标记AA账单为已清账（ID从对账获取）\n"
             "====================\n"
-            "💡 提示：AA默认你是付款人，自动计算人均金额并生成记账记录"
+            "💡 更多帮助：\n"
+            "插件仓库：https://github.com/anchorAnc/astrbot-plugin-accounting\n"
+            "使用文档：https://github.com/anchorAnc/astrbot-plugin-accounting/blob/main/README.md"
         )
         yield event.plain_result(help_text)
 
+    # ---------------------- 以下为原有功能代码（无修改，确保完整性） ----------------------
     @accounting_main_group.command("+")
     async def add_income(self, event: AstrMessageEvent, amount: str, source: str, note: str = ""):
         user_id = event.get_sender_id()
@@ -184,13 +189,13 @@ class AccountingPlugin(Star):
         for idx, rec in enumerate(records):
             if rec["id"] == record_id:
                 records.pop(idx)
-                self._save_accounting_data()  # 修复原代码调用错误：save_data() → _save_accounting_data()
+                self._save_accounting_data()
                 type_str = "收入" if rec["type"] == "income" else "支出"
                 yield event.plain_result(f"✅ 已删除{type_str}记录：{rec['amount']}")
                 return
         yield event.plain_result(f"❌ 未找到ID为「{record_id}」的记录")
 
-    # ---------------------- 核心修改：极简AA分账（合并创建+分账） ----------------------
+    # ---------------------- 极简AA分账功能 ----------------------
     @accounting_main_group.command("aa")
     async def handle_aa_all_in_one(self, event: AstrMessageEvent, *args):
         """
@@ -201,7 +206,7 @@ class AccountingPlugin(Star):
         3. /ac aa 清账 账单ID → 标记已清账
         """
         user_id = event.get_sender_id()
-        current_user = event.get_sender_name() or f"用户{user_id[:4]}"  # 当前用户（默认付款人）
+        current_user = event.get_sender_name() or f"用户{user_id[:4]}"
         current_time = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
         current_timestamp = int(time.time())
 
@@ -216,13 +221,14 @@ class AccountingPlugin(Star):
             await self._clear_aa_bill(event, bill_id, current_time)
             return
 
-        # 操作3：创建+分账（最少需要1个参与人+金额，如 /ac aa 张三 100）
+        # 操作3：创建+分账（最少需要1个参与人+金额）
         if len(args) < 2:
             yield event.plain_result(
                 "❌ AA指令格式错误！正确用法：\n"
                 "1. 分账：/ac aa 参与人1 参与人2 金额（例：/ac aa 张三 李四 300）\n"
                 "2. 对账：/ac aa 对账\n"
-                "3. 清账：/ac aa 清账 账单ID（例：/ac aa 清账 a1b2c3）"
+                "3. 清账：/ac aa 清账 账单ID（例：/ac aa 清账 a1b2c3）\n"
+                "💡 更多帮助：https://github.com/anchorAnc/astrbot-plugin-accounting/blob/main/README.md"
             )
             return
 
@@ -239,23 +245,23 @@ class AccountingPlugin(Star):
             yield event.plain_result(f"❌ 金额错误：请输入数字（如100或250.5）")
             return
 
-        # 自动加入当前用户（避免漏加自己）
+        # 自动加入当前用户（去重）
         if current_user not in participants:
             participants.append(current_user)
-        participants = list(set(participants))  # 去重
+        participants = list(set(participants))
         total_people = len(participants)
         per_person = round(total_amount / total_people, 2)
 
-        # 处理分账误差（确保总金额=人均×人数，误差加给付款人）
+        # 处理分账误差
         total_calculated = round(per_person * total_people, 2)
         diff = round(total_amount - total_calculated, 2)
         payer_actual = per_person + diff if diff != 0 else per_person
 
-        # 生成4位短账单ID（易记）
+        # 生成4位短账单ID
         bill_id = str(uuid.uuid4())[:4]
 
-        # 1. 生成记账记录（付款人支出+其他人应收）
-        # 1.1 付款人（当前用户）支出记录
+        # 1. 生成记账记录
+        # 付款人支出记录
         expense_id = str(uuid.uuid4())[:8]
         expense_record = {
             "id": expense_id,
@@ -269,7 +275,7 @@ class AccountingPlugin(Star):
         }
         self.user_records.setdefault(user_id, []).append(expense_record)
 
-        # 1.2 其他参与人应收记录（记为收入）
+        # 其他参与人应收记录
         income_records = []
         other_people = [p for p in participants if p != current_user]
         for person in other_people:
@@ -287,7 +293,7 @@ class AccountingPlugin(Star):
             self.user_records.setdefault(user_id, []).append(income_record)
             income_records.append({"person": person, "id": income_id, "amount": per_person})
 
-        # 2. 保存AA账单（用于对账/清账）
+        # 2. 保存AA账单
         self.aa_bills[bill_id] = {
             "id": bill_id,
             "total_amount": round(total_amount, 2),
@@ -303,7 +309,7 @@ class AccountingPlugin(Star):
             }
         }
 
-        # 3. 保存所有数据
+        # 3. 保存数据
         self._save_accounting_data()
         self._save_aa_data()
 
@@ -321,7 +327,7 @@ class AccountingPlugin(Star):
             f"\n📜 生成记账记录：\n"
             f"• 你支出：{total_amount}元（ID：{expense_id}）\n"
         )
-        for rec in income_records[:2]:  # 最多显示2条应收记录
+        for rec in income_records[:2]:
             result += f"• 应收{rec['person']}：{rec['amount']}元（ID：{rec['id']}）\n"
         if len(income_records) > 2:
             result += f"• ... 共{len(income_records)}条应收记录\n"
@@ -330,12 +336,11 @@ class AccountingPlugin(Star):
 
     # ---------------------- AA辅助功能（对账/清账） ----------------------
     async def _show_aa_bills(self, event: AstrMessageEvent):
-        """查看所有AA账单（区分待清账/已清账）"""
+        """查看所有AA账单"""
         if not self.aa_bills:
             yield event.plain_result("📋 暂无AA账单\n创建AA：/ac aa 参与人 金额（例：/ac aa 张三 100）")
             return
 
-        # 按时间倒序排列
         sorted_bills = sorted(self.aa_bills.values(), key=lambda x: x["create_time"], reverse=True)
         pending = [b for b in sorted_bills if b["status"] == "待清账"]
         cleared = [b for b in sorted_bills if b["status"] == "已清账"]
@@ -343,11 +348,10 @@ class AccountingPlugin(Star):
         output = "📊 AA对账记录\n"
         output += "========================================\n"
 
-        # 待清账（优先显示）
         if pending:
             output += f"🔴 待清账（{len(pending)}条）\n"
             output += "----------------------------------------\n"
-            for bill in pending[:5]:  # 最多显示5条
+            for bill in pending[:5]:
                 output += (
                     f"ID: {bill['id']} | 金额: {bill['total_amount']}元\n"
                     f"参与: {', '.join(bill['participants'])} | 每人: {bill['per_person']}元\n"
@@ -355,18 +359,18 @@ class AccountingPlugin(Star):
                     "----------------------------------------\n"
                 )
 
-        # 已清账
         if cleared:
             output += f"🟢 已清账（{len(cleared)}条）\n"
             output += "----------------------------------------\n"
-            for bill in cleared[:3]:  # 最多显示3条
+            for bill in cleared[:3]:
                 output += (
                     f"ID: {bill['id']} | 金额: {bill['total_amount']}元\n"
                     f"参与: {', '.join(bill['participants'])} | 清账时间: {bill['clear_time']}\n"
                     "----------------------------------------\n"
                 )
 
-        output += f"📝 总计：共{len(sorted_bills)}条（待清账{len(pending)}条）"
+        output += f"📝 总计：共{len(sorted_bills)}条（待清账{len(pending)}条）\n"
+        output += "💡 更多帮助：https://github.com/anchorAnc/astrbot-plugin-accounting/blob/main/README.md"
         yield event.plain_result(output)
 
     async def _clear_aa_bill(self, event: AstrMessageEvent, bill_id: str, clear_time: str):
@@ -428,4 +432,4 @@ class AccountingPlugin(Star):
     async def terminate(self):
         self._save_accounting_data()
         self._save_aa_data()
-        logger.info("记账插件（v1.3.0 极简AA版）已卸载，数据已保存")
+        logger.info("记账插件（v1.3.1 极简AA版）已卸载，数据已保存")
