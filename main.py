@@ -1,414 +1,460 @@
-from astrbot.api.event import filter, AstrMessageEvent, MessageEventResult
+from astrbot.api.event import filter, AstrMessageEvent
 from astrbot.api.star import Context, Star, register
-from astrbot.api import logger
-from typing import Dict, List, Optional
-import json
-import os
-import time
-import uuid
+from astrbot.api import logger, AstrBotConfig
+from astrbot.api.message_components import At, Plain, Image, MessageChain
 from datetime import datetime
+import asyncio
+from typing import Dict, List, Optional, Tuple
+
+# 账单数据结构定义
+class AABill:
+    def __init__(self, bill_id: str, creator_id: str, creator_name: str, title: str):
+        self.bill_id = bill_id  # 账单唯一ID（时间戳+创建者ID前4位）
+        self.creator_id = creator_id  # 创建者ID
+        self.creator_name = creator_name  # 创建者昵称
+        self.title = title  # 账单标题（如“周末聚餐”）
+        self.create_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")  # 创建时间
+        self.items: List[Dict] = []  # 消费项列表，每个元素含name/amount/payer_id/payer_name
+        self.members: Dict[str, str] = {}  # 参与人列表（ID: 昵称）
+        self.total_amount: float = 0.0  # 总金额
+        self.settled: bool = False  # 是否已结算
+
+    def add_item(self, name: str, amount: float, payer_id: str, payer_name: str) -> bool:
+        """添加消费项，自动更新总金额和参与人"""
+        if self.settled:
+            return False  # 已结算账单不可修改
+        # 校验金额合法性
+        if amount <= 0:
+            return False
+        # 添加消费项
+        self.items.append({
+            "name": name,
+            "amount": round(amount, 2),
+            "payer_id": payer_id,
+            "payer_name": payer_name
+        })
+        # 更新总金额
+        self.total_amount = round(self.total_amount + amount, 2)
+        # 添加付款人到参与人列表
+        self.members[payer_id] = payer_name
+        return True
+
+    def add_member(self, member_id: str, member_name: str) -> bool:
+        """手动添加参与人（非付款人）"""
+        if self.settled:
+            return False
+        if member_id not in self.members:
+            self.members[member_id] = member_name
+            return True
+        return False  # 已存在该成员
+
+    def calculate_dues(self) -> Dict[str, Tuple[float, float]]:
+        """计算每个人的应付金额和收支差额
+        返回格式：{成员ID: (应付金额, 收支差额)}
+        收支差额 = 已付款金额 - 应付金额（正数为应收回，负数为应支付）
+        """
+        if not self.members:
+            return {}
+        
+        # 1. 计算每人已付款总金额
+        payer_summary: Dict[str, float] = {}
+        for item in self.items:
+            payer_id = item["payer_id"]
+            amount = item["amount"]
+            payer_summary[payer_id] = round(payer_summary.get(payer_id, 0.0) + amount, 2)
+        
+        # 2. 计算每人应付金额（总金额 / 参与人数，保留2位小数）
+        member_count = len(self.members)
+        per_person_dues = round(self.total_amount / member_count, 2) if member_count > 0 else 0.0
+        
+        # 3. 计算收支差额
+        result = {}
+        for member_id, member_name in self.members.items():
+            paid = payer_summary.get(member_id, 0.0)
+            dues = per_person_dues
+            balance = round(paid - dues, 2)  # 差额：正=应收回，负=应支付
+            result[member_id] = (dues, balance)
+        
+        return result
+
+    def mark_settled(self) -> bool:
+        """标记账单为已结算"""
+        if not self.items:
+            return False  # 空账单不可结算
+        self.settled = True
+        return True
+
+    def to_text(self) -> str:
+        """将账单信息转为文本格式，用于展示"""
+        # 基础信息
+        text = f"📊 【AA账单】{self.title}\n"
+        text += f"编号：{self.bill_id}\n"
+        text += f"创建者：{self.creator_name}（{self.create_time}）\n"
+        text += f"状态：{'✅ 已结算' if self.settled else '🔄 待结算'}\n"
+        text += f"总金额：¥{self.total_amount:.2f} | 参与人数：{len(self.members)}人\n\n"
+        
+        # 消费项列表
+        if self.items:
+            text += "📝 消费项：\n"
+            for idx, item in enumerate(self.items, 1):
+                text += f"  {idx}. {item['name']} - ¥{item['amount']:.2f}（付款人：{item['payer_name']}）\n"
+        else:
+            text += "📝 消费项：暂无\n"
+        
+        # 参与人列表
+        if self.members:
+            text += "\n👥 参与人：\n"
+            members_str = "、".join([name for name in self.members.values()])
+            text += f"  {members_str}\n"
+        
+        # 计算结果（仅待结算账单展示）
+        if not self.settled and self.items and self.members:
+            text += "\n💸 分账计算：\n"
+            dues_data = self.calculate_dues()
+            for member_id, (dues, balance) in dues_data.items():
+                member_name = self.members[member_id]
+                if balance > 0:
+                    text += f"  {member_name}：应付¥{dues:.2f} | 多付¥{balance:.2f}（应收回）\n"
+                elif balance < 0:
+                    text += f"  {member_name}：应付¥{dues:.2f} | 少付¥{abs(balance):.2f}（应支付）\n"
+                else:
+                    text += f"  {member_name}：应付¥{dues:.2f} | 刚好付清\n"
+        
+        return text
 
 
 @register(
-    "aa_settlement",  # 插件唯一标识
-    "YourName",       # 插件作者
-    "简洁AA分账系统（支持/aa 陈 100等简洁指令）",  # 插件描述
-    "1.0.0"           # 版本号
+    plugin_name="astrbot_plugin_aa_split",  # 插件名（必须以astrbot_plugin_开头）
+    author="YourName",  # 替换为你的名字/昵称
+    description="AA制分账插件，支持创建账单、添加消费项、自动计算每个人应付金额",
+    version="1.0.0",
+    repo_url="https://github.com/YourRepo/astrbot_plugin_aa_split"  # 替换为你的仓库地址（可选）
 )
-class AASettlementPlugin(Star):
-    def __init__(self, context: Context):
+class AASplitPlugin(Star):
+    def __init__(self, context: Context, config: Optional[AstrBotConfig] = None):
         super().__init__(context)
-        # 核心数据结构（用户ID隔离账单）
-        self.aa_bills: Dict[str, List[Dict]] = {}  # {用户ID: [账单列表]}
-        self.settlement_records: Dict[str, List[Dict]] = {}  # {用户ID: [清账记录]}
-        # 数据持久化路径
-        self.bills_path = os.path.join(os.path.dirname(__file__), "aa_bills.json")
-        self.records_path = os.path.join(os.path.dirname(__file__), "settlement_records.json")
-        # 加载历史数据
-        self._load_persistent_data()
+        self.config = config  # 插件配置（如后续需扩展自定义配置可使用）
+        self.bills: Dict[str, AABill] = {}  # 账单存储（bill_id: AABill对象）
+        self.session_data: Dict[str, str] = {}  # 会话临时数据（用于多轮交互，如创建账单）
+        logger.info("AA制分账插件初始化完成，已准备就绪！")
 
     async def initialize(self):
-        """异步初始化（框架自动调用）"""
-        logger.info("简洁AA分账系统初始化完成，已加载历史数据")
+        """插件异步初始化（如加载历史账单，此处暂用内存存储，实际可扩展文件/数据库存储）"""
+        # 如需持久化，可在此处读取本地文件（如JSON）加载历史账单
+        pass
 
-    # ---------------------- 核心：单一指令入口 /aa，自动判断功能 ----------------------
-    @filter.command("aa")
-    async def aa_main_handler(self, event: AstrMessageEvent):
+    # ------------------------------ 核心指令组：/aa ------------------------------
+    @filter.command_group("aa", alias={"aasplit", "分账"})
+    async def aa_group(self, event: AstrMessageEvent):
+        """AA制分账主指令组，所有分账功能通过该指令触发
+        可用子指令：create（创建账单）、add（添加消费）、member（添加参与人）、calc（计算分账）、list（账单列表）、settle（标记结算）
         """
-        单一指令入口，自动识别功能：
-        - 创建账单：/aa [参与人] [金额] [描述可选]（例：/aa 陈 100 | /aa 张三 李四 600 聚餐）
-        - 查看所有账单：/aa 查（例：/aa 查）
-        - 查看债务明细：/aa 对账 [账单ID]（例：/aa 对账 abc123）
-        - 标记清账：/aa 清账 [账单ID]（例：/aa 清账 abc123）
-        - 查看帮助：/aa 或 /aa 帮助（例：/aa 帮助）
-        """
-        # 参考示例：获取用户纯文本消息并解析参数
-        message_str = event.message_str.strip()
-        # 分割参数（去除 "/aa" 前缀，得到后续所有参数）
-        params = list(filter(None, message_str.split(" ")))[1:]  # params 为 "/aa" 后的所有内容
+        pass
 
-        # 1. 无参数 / 仅输入 "帮助" → 显示帮助
-        if not params or params[0] == "帮助":
-            yield event.plain_result(self._get_help_text())
+    # 1. 子指令：创建账单（/aa create 账单标题）
+    @aa_group.command("create", alias={"新建", "创建"})
+    async def aa_create(self, event: AstrMessageEvent, title: str):
+        """创建新的AA账单
+        用法：/aa create 周末聚餐（或 /分账 新建 团建费用）
+        """
+        # 生成账单唯一ID（时间戳+创建者ID前4位，避免重复）
+        timestamp = datetime.now().timestamp()
+        creator_id = event.get_sender_id()
+        bill_id = f"AA{int(timestamp)}_{creator_id[:4]}"
         
-        # 2. 参数为 "查" → 查看所有账单
-        elif params[0] == "查":
-            yield event.plain_result(await self._list_all_bills(event))
+        # 创建账单对象
+        creator_name = event.get_sender_name()
+        new_bill = AABill(
+            bill_id=bill_id,
+            creator_id=creator_id,
+            creator_name=creator_name,
+            title=title
+        )
         
-        # 3. 参数为 "对账" → 查看债务明细（需账单ID）
-        elif params[0] == "对账":
-            if len(params) < 2:  # 缺少账单ID
-                yield event.plain_result("❌ 格式错误！正确用法：/aa 对账 [账单ID]（例：/aa 对账 abc123）")
-            else:
-                yield event.plain_result(await self._show_debt_detail(event, params[1]))
+        # 添加创建者为默认参与人
+        new_bill.add_member(creator_id, creator_name)
         
-        # 4. 参数为 "清账" → 标记账单清账（需账单ID）
-        elif params[0] == "清账":
-            if len(params) < 2:  # 缺少账单ID
-                yield event.plain_result("❌ 格式错误！正确用法：/aa 清账 [账单ID]（例：/aa 清账 abc123）")
-            else:
-                yield event.plain_result(await self._mark_bill_cleared(event, params[1]))
+        # 存储账单
+        self.bills[bill_id] = new_bill
         
-        # 5. 其他参数组合 → 默认为创建账单（/aa [参与人] [金额] [描述可选]）
+        # 回复结果
+        reply_text = f"✅ 成功创建AA账单！\n"
+        reply_text += f"编号：{bill_id}\n"
+        reply_text += f"标题：{title}\n"
+        reply_text += f"\n下一步操作：\n"
+        reply_text += f"1. 添加消费项：/aa add {bill_id} 火锅 300（付款人默认是你）\n"
+        reply_text += f"2. 添加参与人：/aa member {bill_id} @好友（或指定ID）\n"
+        reply_text += f"3. 查看账单：/aa list {bill_id}"
+        
+        yield event.plain_result(reply_text)
+        logger.info(f"用户{creator_name}({creator_id})创建AA账单：{bill_id}_{title}")
+
+    # 2. 子指令：添加消费项（/aa add 账单ID 消费名称 金额 [付款人ID/@付款人]）
+    @aa_group.command("add", alias={"添加消费", "加项"})
+    async def aa_add_item(self, event: AstrMessageEvent, bill_id: str, item_name: str, amount: float, payer: Optional[str] = None):
+        """添加消费项到指定账单
+        用法1（自己付款）：/aa add AA123456_1234 火锅 300
+        用法2（指定他人付款）：/aa add AA123456_1234 奶茶 50 @好友（或好友ID）
+        """
+        # 1. 校验账单是否存在
+        if bill_id not in self.bills:
+            yield event.plain_result(f"❌ 未找到编号为【{bill_id}】的账单，请检查编号是否正确！")
+            return
+        
+        bill = self.bills[bill_id]
+        
+        # 2. 校验账单状态（已结算不可修改）
+        if bill.settled:
+            yield event.plain_result(f"❌ 账单【{bill_id}】已结算，不可添加新消费项！")
+            return
+        
+        # 3. 确定付款人信息
+        sender_id = event.get_sender_id()
+        sender_name = event.get_sender_name()
+        
+        if not payer:
+            # 未指定付款人，默认是指令发送者
+            payer_id = sender_id
+            payer_name = sender_name
         else:
-            yield event.plain_result(await self._create_bill(event, params))
-
-    # ---------------------- 功能1：创建账单（核心支持 /aa 陈 100 格式） ----------------------
-    async def _create_bill(self, event: AstrMessageEvent, params: List[str]) -> str:
-        """创建账单，支持：/aa 陈 100（简单）、/aa 张三 李四 600 聚餐（带描述）"""
-        # 基础校验：至少需要 参与人 + 金额 2个参数
-        if len(params) < 2:
-            return (
-                "❌ 创建账单格式错误！\n"
-                "📌 简单模式（参与人+金额）：/aa [参与人] [金额]（例：/aa 陈 100）\n"
-                "📌 完整模式（含描述）：/aa [参与人1] [参与人2] ... [金额] [描述]（例：/aa 张三 李四 600 聚餐）"
-            )
-
-        # 解析金额：从后往前找第一个数字（兼容描述含数字，如 /aa 陈 100 2024午餐）
-        total_amount = None
-        amount_index = -1
-        for idx in reversed(range(len(params))):
-            try:
-                total_amount = float(params[idx])
-                amount_index = idx
-                break
-            except ValueError:
-                continue  # 不是数字则继续向前找
-
-        # 金额合法性校验
-        if total_amount is None or total_amount <= 0:
-            return "❌ 金额错误！请输入有效的正数（支持小数，如 25.5 表示25.5元）"
-
-        # 提取核心信息
-        participants = params[:amount_index]  # 金额前的所有参数 = 参与人列表
-        total_amount = round(total_amount, 2)  # 金额保留2位小数
-        # 金额后的参数 = 消费描述（无则默认"日常消费"）
-        consumption_desc = " ".join(params[amount_index+1:]) if (amount_index + 1 < len(params)) else "日常消费"
-
-        # 获取付款人信息（当前指令发送者）
-        payer_id = event.get_sender_id()
-        payer_name = event.get_sender_name() or f"用户{payer_id[:4]}"  # 无用户名用ID前4位
-
-        # 补充付款人到参与人列表并去重（避免遗漏自己）
-        if payer_name not in participants:
-            participants.append(payer_name)
-        participants = list(set(participants))  # 去重（如重复输入同一人）
-        total_people = len(participants)
-
-        # 计算分摊金额与分账误差（误差由付款人承担，确保总金额正确）
-        per_person_amount = round(total_amount / total_people, 2)
-        calculated_total = round(per_person_amount * total_people, 2)
-        amount_diff = round(total_amount - calculated_total, 2)
-
-        # 生成账单唯一信息
-        bill_id = str(uuid.uuid4())[:6]  # 6位短ID（易记，如 abc123）
-        create_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        create_timestamp = int(time.time())  # 时间戳（用于排序）
-
-        # 构建账单详情
-        bill_detail = {
-            "bill_id": bill_id,
-            "payer": {"id": payer_id, "name": payer_name},
-            "total_amount": total_amount,
-            "description": consumption_desc,
-            "participants": participants,
-            "total_people": total_people,
-            "per_person": per_person_amount,
-            "diff": amount_diff,
-            "status": "pending",  # 状态：pending=待清账，cleared=已清账
-            "create_time": create_time,
-            "timestamp": create_timestamp,
-            "clear_time": None,
-            "clearer": None,
-            "debts": self._generate_debt_relations(payer_name, participants, per_person_amount)
-        }
-
-        # 保存账单（按用户ID隔离）
-        self.aa_bills.setdefault(payer_id, []).append(bill_detail)
-        self._save_persistent_data()  # 持久化避免重启丢失
-
-        # 生成创建成功回复
-        result = (
-            "✅ 账单创建成功！\n"
-            "=" * 40 + "\n"
-            f"🆔 账单ID：{bill_id}\n"
-            f"💸 付款人：{payer_name}\n"
-            f"📝 描述：{consumption_desc}\n"
-            f"💰 总金额：{total_amount}元\n"
-            f"👥 参与人（{total_people}人）：{', '.join(participants)}\n"
-            f"🧮 每人分摊：{per_person_amount}元\n"
+            # 处理@付款人（优先识别@消息段）
+            at_components = [comp for comp in event.get_messages() if comp.type == "At"]
+            if at_components:
+                payer_id = at_components[0].qq  # QQ平台At组件的用户ID字段
+                payer_name = at_components[0].name or f"用户{payer_id[:4]}"
+            else:
+                # 手动指定付款人ID
+                payer_id = payer
+                payer_name = f"用户{payer_id[:4]}"  # 若无法获取昵称，用ID前4位代替
+        
+        # 4. 添加消费项
+        success = bill.add_item(
+            name=item_name,
+            amount=amount,
+            payer_id=payer_id,
+            payer_name=payer_name
         )
-        if amount_diff > 0:
-            result += f"⚠️  分账误差：{payer_name}多承担{amount_diff}元\n"
-        result += (
-            f"⏰ 时间：{create_time}\n"
-            "=" * 40 + "\n"
-            "💡 后续操作：\n"
-            "  查看所有账单：/aa 查\n"
-            f"  标记清账：/aa 清账 {bill_id}\n"
-            f"  查看债务：/aa 对账 {bill_id}"
-        )
-        return result
+        
+        if not success:
+            yield event.plain_result(f"❌ 消费项添加失败！请确保金额为正数（当前金额：{amount}）")
+            return
+        
+        # 5. 回复结果
+        reply_text = f"✅ 成功添加消费项到账单【{bill.title}】（{bill_id}）\n"
+        reply_text += f"消费项：{item_name} - ¥{amount:.2f}\n"
+        reply_text += f"付款人：{payer_name}\n"
+        reply_text += f"当前总金额：¥{bill.total_amount:.2f} | 参与人数：{len(bill.members)}人\n"
+        reply_text += f"\n提示：可继续添加消费项，或用 /aa calc {bill_id} 查看分账结果"
+        
+        yield event.plain_result(reply_text)
+        logger.info(f"账单{bill_id}添加消费项：{item_name}(¥{amount})，付款人：{payer_name}")
 
-    # ---------------------- 功能2：查看所有账单（/aa 查） ----------------------
-    async def _list_all_bills(self, event: AstrMessageEvent) -> str:
-        """查看当前用户所有账单，按时间倒序排列"""
-        user_id = event.get_sender_id()
-        user_bills = self.aa_bills.get(user_id, [])
+    # 3. 子指令：添加参与人（/aa member 账单ID @成员1 @成员2 或 /aa member 账单ID 成员ID 成员昵称）
+    @aa_group.command("member", alias={"添加成员", "加人"})
+    async def aa_add_member(self, event: AstrMessageEvent, bill_id: str, *members: str):
+        """添加参与人到指定账单（支持@多个成员或手动输入ID+昵称）
+        用法1（@成员）：/aa member AA123456_1234 @好友1 @好友2
+        用法2（手动输入）：/aa member AA123456_1234 123456 小明 654321 小红
+        """
+        # 1. 校验账单
+        if bill_id not in self.bills:
+            yield event.plain_result(f"❌ 未找到编号为【{bill_id}】的账单！")
+            return
+        
+        bill = self.bills[bill_id]
+        if bill.settled:
+            yield event.plain_result(f"❌ 账单【{bill_id}】已结算，不可添加参与人！")
+            return
+        
+        # 2. 解析参与人（优先处理@消息段）
+        added_count = 0
+        failed_list = []
+        
+        # 先处理消息中的@组件（无需在指令参数中显式输入）
+        at_components = [comp for comp in event.get_messages() if comp.type == "At"]
+        for at_comp in at_components:
+            member_id = at_comp.qq
+            member_name = at_comp.name or f"用户{member_id[:4]}"
+            if bill.add_member(member_id, member_name):
+                added_count += 1
+            else:
+                failed_list.append(f"{member_name}（已存在）")
+        
+        # 再处理指令参数中的手动输入成员（需成对输入：ID 昵称）
+        if len(members) % 2 == 0:
+            for i in range(0, len(members), 2):
+                member_id = members[i]
+                member_name = members[i+1]
+                if bill.add_member(member_id, member_name):
+                    added_count += 1
+                else:
+                    failed_list.append(f"{member_name}（已存在）")
+        elif members:
+            # 手动输入参数数量不对（非成对）
+            failed_list.append("手动输入格式错误（需成对输入：成员ID 成员昵称）")
+        
+        # 3. 回复结果
+        reply_text = f"✅ 参与人添加完成（账单：{bill.title} - {bill_id}）\n"
+        reply_text += f"成功添加：{added_count}人\n"
+        if failed_list:
+            reply_text += f"添加失败：{'; '.join(failed_list)}\n"
+        reply_text += f"当前参与人总数：{len(bill.members)}人\n"
+        reply_text += f"参与人列表：{', '.join(bill.members.values())}"
+        
+        yield event.plain_result(reply_text)
+        logger.info(f"账单{bill_id}添加参与人：成功{added_count}人，失败{len(failed_list)}项")
 
-        # 无账单时提示
-        if not user_bills:
-            return (
-                "📋 暂无AA账单\n"
-                "💡 快速创建：\n"
-                "   /aa [参与人] [金额]（例：/aa 陈 100）\n"
-                "   /aa [参与人] [金额] [描述]（例：/aa 陈 100 午餐）"
-            )
+    # 4. 子指令：计算分账（/aa calc 账单ID）
+    @aa_group.command("calc", alias={"计算", "分账结果"})
+    async def aa_calculate(self, event: AstrMessageEvent, bill_id: str):
+        """计算指定账单的分账结果，展示每个人应付金额和收支差额
+        用法：/aa calc AA123456_1234（或 /分账 计算 AA123456_1234）
+        """
+        # 1. 校验账单
+        if bill_id not in self.bills:
+            yield event.plain_result(f"❌ 未找到编号为【{bill_id}】的账单！")
+            return
+        
+        bill = self.bills[bill_id]
+        
+        # 2. 校验账单数据（需有消费项和参与人）
+        if not bill.items:
+            yield event.plain_result(f"❌ 账单【{bill_id}】暂无消费项，请先添加消费（/aa add 账单ID 消费名 金额）！")
+            return
+        
+        if len(bill.members) < 2:
+            yield event.plain_result(f"❌ 账单【{bill_id}】参与人不足2人（当前{len(bill.members)}人），无法进行AA分账！")
+            return
+        
+        # 3. 生成分账结果文本
+        result_text = bill.to_text()
+        result_text += "\n📌 分账建议：\n"
+        result_text += "  - 收支差额为正数的成员：可收回对应金额\n"
+        result_text += "  - 收支差额为负数的成员：需支付对应金额\n"
+        result_text += f"  - 结算后请标记：/aa settle {bill_id}"
+        
+        # 4. 发送结果（支持长文本，若超过平台限制可自动转为图片）
+        # 此处先尝试纯文本发送，如需文转图可扩展text_to_image方法
+        yield event.plain_result(result_text)
+        logger.info(f"用户{event.get_sender_name()}查看账单{bill_id}分账结果")
 
-        # 排序（最新在前）+ 统计状态
-        sorted_bills = sorted(user_bills, key=lambda x: x["timestamp"], reverse=True)[:10]  # 最多显示10条
-        pending_count = len([b for b in user_bills if b["status"] == "pending"])
-        cleared_count = len(user_bills) - pending_count
-
-        # 构建账单列表
-        result = (
-            f"📊 我的AA账单（共{len(user_bills)}条，显示最近10条）\n"
-            f"   🔴 待清账：{pending_count}条 | 🟢 已清账：{cleared_count}条\n"
-            "-" * 50 + "\n"
-        )
-        for idx, bill in enumerate(sorted_bills, 1):
-            status_tag = "🔴 待清账" if bill["status"] == "pending" else "🟢 已清账"
-            operation = f"操作：/aa 清账 {bill['bill_id']}" if bill["status"] == "pending" else f"清账时间：{bill['clear_time']}"
+    # 5. 子指令：账单列表（/aa list [账单ID]）
+    @aa_group.command("list", alias={"列表", "查看账单"})
+    async def aa_list(self, event: AstrMessageEvent, bill_id: Optional[str] = None):
+        """查看所有账单或指定账单详情
+        用法1（所有账单）：/aa list（或 /分账 列表）
+        用法2（指定账单）：/aa list AA123456_1234
+        """
+        if bill_id:
+            # 查看指定账单详情
+            if bill_id not in self.bills:
+                yield event.plain_result(f"❌ 未找到编号为【{bill_id}】的账单！")
+                return
+            bill_text = self.bills[bill_id].to_text()
+            yield event.plain_result(bill_text)
+        else:
+            # 查看所有账单（按创建时间倒序）
+            if not self.bills:
+                yield event.plain_result("📭 当前暂无AA账单，可通过 /aa create 标题 创建新账单！")
+                return
             
-            result += (
-                f"{idx}. 账单ID：{bill['bill_id']} | {status_tag}\n"
-                f"   描述：{bill['description']}\n"
-                f"   付款人：{bill['payer']['name']} | 金额：{bill['total_amount']}元\n"
-                f"   参与人：{', '.join(bill['participants'])}\n"
-                f"   创建时间：{bill['create_time']}\n"
-                f"   {operation}\n"
-                "-" * 50 + "\n"
-            )
-        return result
+            # 按创建时间排序（新账单在前）
+            sorted_bills = sorted(self.bills.values(), key=lambda x: x.create_time, reverse=True)
+            
+            # 生成列表文本
+            list_text = "📊 所有AA账单列表（共{len(sorted_bills)}个）：\n\n"
+            for idx, bill in enumerate(sorted_bills, 1):
+                list_text += f"{idx}. 【{bill.title}】\n"
+                list_text += f"   编号：{bill.bill_id}\n"
+                list_text += f"   状态：{'✅ 已结算' if bill.settled else '🔄 待结算'}\n"
+                list_text += f"   总金额：¥{bill.total_amount:.2f} | 参与人：{len(bill.members)}人\n"
+                list_text += f"   创建者：{bill.creator_name}（{bill.create_time}）\n\n"
+            
+            list_text += "📌 操作提示：\n"
+            list_text += "  - 查看详情：/aa list 账单编号\n"
+            list_text += "  - 计算分账：/aa calc 账单编号\n"
+            list_text += "  - 标记结算：/aa settle 账单编号"
+            
+            yield event.plain_result(list_text)
+        
+        logger.info(f"用户{event.get_sender_name()}查看AA账单列表（指定账单：{bill_id if bill_id else '无'}）")
 
-    # ---------------------- 功能3：查看债务明细（/aa 对账 [账单ID]） ----------------------
-    async def _show_debt_detail(self, event: AstrMessageEvent, bill_id: str) -> str:
-        """查看指定账单的债务关系（谁该给谁钱）"""
-        user_id = event.get_sender_id()
-        # 查找目标账单
-        target_bill = None
-        for bill in self.aa_bills.get(user_id, []):
-            if bill["bill_id"] == bill_id:
-                target_bill = bill
-                break
+    # 6. 子指令：标记结算（/aa settle 账单ID）
+    @aa_group.command("settle", alias={"结算", "完成"})
+    async def aa_settle(self, event: AstrMessageEvent, bill_id: str):
+        """标记账单为已结算（仅创建者可操作）
+        用法：/aa settle AA123456_1234（或 /分账 结算 AA123456_1234）
+        """
+        # 1. 校验账单
+        if bill_id not in self.bills:
+            yield event.plain_result(f"❌ 未找到编号为【{bill_id}】的账单！")
+            return
+        
+        bill = self.bills[bill_id]
+        sender_id = event.get_sender_id()
+        
+        # 2. 校验权限（仅创建者可标记结算）
+        if bill.creator_id != sender_id:
+            yield event.plain_result(f"❌ 无权限操作！仅账单创建者（{bill.creator_name}）可标记结算！")
+            return
+        
+        # 3. 标记结算
+        if bill.settled:
+            yield event.plain_result(f"✅ 账单【{bill_id}】已处于结算状态，无需重复操作！")
+            return
+        
+        success = bill.mark_settled()
+        if not success:
+            yield event.plain_result(f"❌ 账单【{bill_id}】暂无消费项，无法标记结算！")
+            return
+        
+        # 4. 回复结果
+        reply_text = f"✅ 成功标记账单【{bill.title}】（{bill_id}）为已结算！\n"
+        reply_text += "📌 结算后账单不可再修改，如需新分账请创建新账单（/aa create 标题）"
+        
+        yield event.plain_result(reply_text)
+        logger.info(f"账单创建者{bill.creator_name}标记账单{bill_id}为已结算")
 
-        # 账单不存在处理
-        if not target_bill:
-            return (
-                f"❌ 未找到ID为「{bill_id}」的账单\n"
-                "💡 可能原因：\n"
-                "   1. 账单ID输入错误\n"
-                "   2. 该账单不属于当前用户\n"
-                "提示：通过 /aa 查 查看所有账单ID"
-            )
-
-        # 构建债务明细
-        status_tag = "🔴 待清账" if target_bill["status"] == "pending" else "🟢 已清账"
-        result = (
-            f"📊 账单「{bill_id}」债务明细 | {status_tag}\n"
-            "=" * 40 + "\n"
-            f"📝 描述：{target_bill['description']}\n"
-            f"💸 付款人：{target_bill['payer']['name']}（垫付{target_bill['total_amount']}元）\n"
-            f"🧮 每人分摊：{target_bill['per_person']}元\n"
-            "\n【债务关系】\n"
-        )
-
-        # 遍历债务列表
-        debts = target_bill["debts"]
-        if not debts:
-            result += "⚠️  无债务关系（仅付款人一人参与）\n"
-        else:
-            for debt in debts:
-                result += f"👉 {debt['debtor']} 应支付 {debt['creditor']} {debt['amount']}元\n"
-
-        # 分账误差说明
-        if target_bill["diff"] > 0:
-            result += (
-                f"\n⚠️  误差说明：\n"
-                f"总金额（{target_bill['total_amount']}元）无法均分，\n"
-                f"{target_bill['payer']['name']}多承担{target_bill['diff']}元\n"
-            )
-
-        # 状态提示
-        if target_bill["status"] == "pending":
-            result += f"\n💡 提示：所有债务结清后，执行 /aa 清账 {bill_id} 标记\n"
-        else:
-            result += f"\n✅ 已清账：{target_bill['clear_time']}（{target_bill['clearer']['name']}操作）\n"
-
-        return result
-
-    # ---------------------- 功能4：标记账单清账（/aa 清账 [账单ID]） ----------------------
-    async def _mark_bill_cleared(self, event: AstrMessageEvent, bill_id: str) -> str:
-        """将指定账单标记为已清账"""
-        user_id = event.get_sender_id()
-        clearer_name = event.get_sender_name() or f"用户{user_id[:4]}"
-        clear_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
-        # 查找目标账单
-        target_bill = None
-        for bill in self.aa_bills.get(user_id, []):
-            if bill["bill_id"] == bill_id:
-                target_bill = bill
-                break
-
-        # 账单不存在处理
-        if not target_bill:
-            return f"❌ 未找到ID为「{bill_id}」的账单\n💡 查看所有账单：/aa 查"
-
-        # 已清账处理
-        if target_bill["status"] == "cleared":
-            return (
-                f"✅ 账单「{bill_id}」已是已清账状态\n"
-                "=" * 30 + "\n"
-                f"清账时间：{target_bill['clear_time']}\n"
-                f"操作人：{target_bill['clearer']['name']}\n"
-                "=" * 30
-            )
-
-        # 更新账单状态
-        target_bill["status"] = "cleared"
-        target_bill["clear_time"] = clear_time
-        target_bill["clearer"] = {"id": user_id, "name": clearer_name}
-
-        # 记录清账记录
-        self.settlement_records.setdefault(user_id, []).append({
-            "record_id": str(uuid.uuid4())[:8],
-            "bill_id": bill_id,
-            "description": target_bill["description"],
-            "amount": target_bill["total_amount"],
-            "clearer": clearer_name,
-            "clear_time": clear_time,
-            "timestamp": int(time.time())
-        })
-
-        # 保存数据
-        self._save_persistent_data()
-
-        # 生成清账成功回复
-        result = (
-            f"✅ 账单「{bill_id}」已标记为已清账！\n"
-            "=" * 40 + "\n"
-            f"📝 描述：{target_bill['description']}\n"
-            f"💰 总金额：{target_bill['total_amount']}元\n"
-            f"⏰ 清账时间：{clear_time}\n"
-            f"🧑 操作人：{clearer_name}\n"
-            "=" * 40
-        )
-        return result
-
-    # ---------------------- 辅助方法 ----------------------
-    def _generate_debt_relations(self, payer: str, participants: List[str], amount: float) -> List[Dict]:
-        """生成债务关系：参与人向付款人支付分摊金额"""
-        return [
-            {"debtor": person, "creditor": payer, "amount": amount}
-            for person in participants if person != payer
-        ]
-
-    def _get_help_text(self) -> str:
-        """生成帮助文本（适配简洁指令）"""
-        return (
-            "📊 简洁AA分账系统帮助（v1.0.0）\n"
-            "=" * 40 + "\n"
-            "【所有可用指令】\n"
-            "\n"
-            "1. 创建账单（最常用）\n"
-            "   📌 格式：/aa [参与人] [金额] [描述可选]\n"
-            "   📌 示例1：/aa 陈 100（1人参与，总金额100元）\n"
-            "   📌 示例2：/aa 张三 李四 600 聚餐（2人参与，描述「聚餐」）\n"
-            "\n"
-            "2. 查看所有账单\n"
-            "   📌 格式：/aa 查\n"
-            "   📌 功能：显示所有账单，区分待清账/已清账\n"
-            "\n"
-            "3. 查看债务明细\n"
-            "   📌 格式：/aa 对账 [账单ID]\n"
-            "   📌 示例：/aa 对账 abc123（查看ID为abc123的账单债务）\n"
-            "\n"
-            "4. 标记账单清账\n"
-            "   📌 格式：/aa 清账 [账单ID]\n"
-            "   📌 示例：/aa 清账 abc123（标记ID为abc123的账单为已清账）\n"
-            "\n"
-            "5. 查看帮助\n"
-            "   📌 格式：/aa 或 /aa 帮助\n"
-            "=" * 40 + "\n"
-            "📢 提示：账单数据按用户隔离，仅自己可见"
-        )
-
-    def _load_persistent_data(self):
-        """加载历史数据（从JSON文件）"""
-        # 加载账单
-        try:
-            if os.path.exists(self.bills_path):
-                with open(self.bills_path, "r", encoding="utf-8") as f:
-                    self.aa_bills = json.load(f)
-                logger.info(f"AA分账系统：加载{len(self.aa_bills)}个用户的账单")
-            else:
-                logger.info("AA分账系统：账单文件不存在，初始化空数据")
-        except Exception as e:
-            logger.error(f"加载账单失败：{e}，初始化空数据")
-            self.aa_bills = {}
-
-        # 加载清账记录
-        try:
-            if os.path.exists(self.records_path):
-                with open(self.records_path, "r", encoding="utf-8") as f:
-                    self.settlement_records = json.load(f)
-                logger.info(f"AA分账系统：加载{len(self.settlement_records)}个用户的清账记录")
-            else:
-                logger.info("AA分账系统：清账记录文件不存在，初始化空数据")
-        except Exception as e:
-            logger.error(f"加载清账记录失败：{e}，初始化空数据")
-            self.settlement_records = {}
-
-    def _save_persistent_data(self):
-        """保存数据到JSON文件（持久化）"""
-        # 保存账单
-        try:
-            with open(self.bills_path, "w", encoding="utf-8") as f:
-                json.dump(self.aa_bills, f, ensure_ascii=False, indent=2)
-            logger.info("AA分账系统：账单数据保存成功")
-        except Exception as e:
-            logger.error(f"保存账单失败：{e}")
-
-        # 保存清账记录
-        try:
-            with open(self.records_path, "w", encoding="utf-8") as f:
-                json.dump(self.settlement_records, f, ensure_ascii=False, indent=2)
-            logger.info("AA分账系统：清账记录保存成功")
-        except Exception as e:
-            logger.error(f"保存清账记录失败：{e}")
+    # ------------------------------ 辅助功能：帮助指令 ------------------------------
+    @filter.command("aahelp", alias={"分账帮助", "aa帮助"})
+    async def aa_help(self, event: AstrMessageEvent):
+        """查看AA分账插件的所有功能和用法
+        用法：/aahelp（或 /分账帮助）
+        """
+        help_text = "📚 AA制分账插件使用帮助\n"
+        help_text += "=======================\n"
+        help_text += "【核心指令组：/aa 或 /分账】\n\n"
+        help_text += "1. 创建账单\n"
+        help_text += "   用法：/aa create 账单标题（如 /aa create 周末聚餐）\n"
+        help_text += "   功能：创建新的AA账单，自动添加创建者为参与人\n\n"
+        help_text += "2. 添加消费项\n"
+        help_text += "   用法1：/aa add 账单ID 消费名 金额（自己付款）\n"
+        help_text += "   用法2：/aa add 账单ID 消费名 金额 @付款人（他人付款）\n"
+        help_text += "   示例：/aa add AA1234 火锅 300 @小明\n\n"
+        help_text += "3. 添加参与人\n"
+        help_text += "   用法1：/aa member 账单ID @好友1 @好友2（@方式）\n"
+        help_text += "   用法2：/aa member 账单ID 123456 小明（ID+昵称）\n"
+        help_text += "   功能：添加非付款人参与分账\n\n"
+        help_text += "4. 计算分账\n"
+        help_text += "   用法：/aa calc 账单ID（如 /aa calc AA1234）\n"
+        help_text += "   功能：自动计算每个人应付金额和收支差额\n\n"
+        help_text += "5. 查看账单\n"
+        help_text += "   用法1：/aa list（查看所有账单）\n"
+        help_text += "   用法2：/aa list 账单ID（查看指定账单详情）\n\n"
+        help_text += "6. 标记结算\n"
+        help_text += "   用法：/aa settle 账单ID（如 /aa settle AA1234）\n"
+        help_text += "   说明：仅账单创建者可操作，结算后不可修改\n\n"
+        help_text += "【其他指令】\n"
+        help_text += "   /aahelp 或 /分账帮助：查看本帮助文档\n"
+        
+        yield event.plain_result(help_text)
+        logger.info(f"用户{event.get_sender_name()}查看AA分账插件帮助")
 
     async def terminate(self):
-        """插件卸载时保存数据（框架自动调用）"""
-        self._save_persistent_data()
-        logger.info("简洁AA分账系统已卸载，所有数据已保存")
+        """插件卸载时执行（如保存账单数据到本地）"""
+        # 此处可扩展持久化逻辑（如将账单保存为JSON文件）
+        if self.bills:
+            bill_count = len(self.bills)
+            logger.info(f"AA制分账插件正在卸载，当前有{bill_count}个账单（可扩展持久化存储）")
+        else:
+            logger.info("AA制分账插件正在卸载，无历史账单")
