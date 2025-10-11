@@ -8,10 +8,10 @@ class AABillPlugin(Star):
         super().__init__(context)
         self.bills = {}  # 用于存储账目，格式为 {"名字": 金额}
 
-    @filter.command("记账")
+    @filter.command("aa")
     async def record_bill(self, event: AstrMessageEvent):
         """
-        指令：/记账 <名字> <金额>
+        指令：/aa <名字> <金额>
         记录某人的支出金额
         """
         user_name = event.get_sender_name()  # 获取用户昵称
@@ -19,15 +19,27 @@ class AABillPlugin(Star):
         
         logger.info(f"用户 {user_name} 调用了记账指令: {message_str}")
         
-        # 指令解析
+        # 分割参数
+        parts = message_str.split()
+        
+        # 如果第一项是指令名“aa”，则剔除它
+        if parts and parts[0] == "aa":
+            parts = parts[1:]
+
+        # 检查参数够不够2个
+        if len(parts) < 2:
+            yield event.plain_result("格式错误！正确的格式是 `/aa <名字> <金额>`，示例：`/aa 陈 100`")
+            return
+
+        # 获取名字和金额并处理错误
+        name = parts[0]
         try:
-            parts = message_str.split()
-            name = parts[0]
             amount = float(parts[1])
-        except (IndexError, ValueError):
-            yield event.plain_result("格式错误！正确的格式是 `/记账 <名字> <金额>`。例如：`/记账 陈 100`")
+        except ValueError:
+            yield event.plain_result("金额必须是数字！")
             return
         
+        # 更新账单记录
         if name not in self.bills:
             self.bills[name] = 0
         self.bills[name] += amount
@@ -97,11 +109,18 @@ class AABillPlugin(Star):
         
         logger.info(f"用户 {user_name} 调用了删除账单指令: {message_str}")
         
-        if not message_str:
+        # 分割参数
+        parts = message_str.split()
+
+        # 如果第一项是“删除账单”，说明 message_str 包含指令名，剔除它
+        if parts and parts[0] == "删除账单":
+            parts = parts[1:]
+
+        if len(parts) < 1:
             yield event.plain_result("请提供需要删除账单的姓名，格式为 `/删除账单 <名字>`")
             return
         
-        name = message_str.split()[0]
+        name = parts[0]
         if name in self.bills:
             del self.bills[name]
             yield event.plain_result(f"已删除{name}的账单记录。")
