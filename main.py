@@ -1,5 +1,6 @@
-# 从filter模块中正确导入filter装饰器（关键修复）
-from astrbot.api.event.filter import filter, AstrMessageEvent
+# 从正确路径导入filter装饰器（适配当前框架版本）
+from astrbot.api import filter
+from astrbot.api.event import AstrMessageEvent
 from astrbot.api.star import Context, Star, register
 from astrbot.api import logger
 from typing import Dict, List, Optional
@@ -11,46 +12,43 @@ from datetime import datetime
 
 
 @register(
-    "aa_settlement",  # 插件唯一标识（不可重复）
-    "anchor",          # 插件作者
-    "简易AA记账机器人（支持创建账单、查询、对账、清账）",  # 插件描述
-    "2.3.0",           # 插件版本（已更新版本号）
-    "https://github.com/edc8/bot"  # 插件仓库地址（与安装地址一致）
+    "aa_settlement",  # 插件唯一标识
+    "anchor",          # 作者
+    "简易AA记账机器人（支持创建账单、查询、对账、清账）",  # 描述
+    "2.4.0",           # 版本号（已更新）
+    "https://github.com/edc8/bot"  # 插件仓库地址
 )
 class AASettlementPlugin(Star):
     def __init__(self, context: Context):
-        """插件初始化：加载数据与初始化结构"""
         super().__init__(context)
-        # 核心数据结构（按用户ID隔离数据）
-        self.aa_bills: Dict[str, List[Dict]] = {}  # 存储账单：key=用户ID，value=账单列表
-        self.settlement_records: Dict[str, List[Dict]] = {}  # 存储清账记录
-        
-        # 数据持久化路径（插件目录下）
+        # 核心数据结构
+        self.aa_bills: Dict[str, List[Dict]] = {}  # 按用户ID存储账单
+        self.settlement_records: Dict[str, List[Dict]] = {}  # 清账记录
+        # 数据持久化路径
         self.bills_path = os.path.join(os.path.dirname(__file__), "aa_bills.json")
         self.records_path = os.path.join(os.path.dirname(__file__), "settlement_records.json")
-        
-        # 加载历史数据
+        # 加载数据
         self._load_persistent_data()
 
-    # ---------------------- 消息处理入口 ----------------------
+    # 主入口：消息处理
     @filter()
     async def handle_message(self, event: AstrMessageEvent):
-        """处理所有消息，只响应/aa开头的指令"""
+        """处理所有/aa开头的指令"""
         content = event.get_content().strip()
         if not content.startswith("/aa"):
-            return  # 忽略非/aa指令
-        
-        # 解析指令参数（处理多空格情况）
-        parts = list(filter(None, content.split(" ")))[1:]  # 去除"/aa"后的参数列表
+            return
+
+        # 解析指令参数
+        parts = list(filter(None, content.split(" ")))[1:]  # 去除"/aa"
         response = await self._process_command(event, parts)
         
         # 回复结果
         if response:
             await event.reply(response)
 
-    # ---------------------- 指令处理逻辑 ----------------------
+    # 指令处理逻辑
     async def _process_command(self, event: AstrMessageEvent, params: List[str]) -> str:
-        """分发不同指令到对应处理函数"""
+        """分发不同指令"""
         if not params:
             return self._get_help_text()  # /aa 显示帮助
         
@@ -347,3 +345,4 @@ class AASettlementPlugin(Star):
         """插件卸载时保存数据"""
         self._save_persistent_data()
         logger.info("AA记账插件已卸载，数据已保存")
+    
