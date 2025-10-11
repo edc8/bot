@@ -12,7 +12,7 @@ import uuid
     "accounting",  # 插件名称
     "anchor",      # 作者
     "简单记账机器人（含极简AA分账功能）",  # 描述
-    "1.3.7"        # 版本
+    "1.3.8"        # 版本
 )
 class AccountingPlugin(Star):
     def __init__(self, context: Context):
@@ -37,7 +37,7 @@ class AccountingPlugin(Star):
     async def show_help(self, event: AstrMessageEvent):
         """显示帮助"""
         help_text = (
-            "📊 记账机器人帮助（v1.3.7 · 修复版）\n"
+            "📊 记账机器人帮助（v1.3.8 · 修复版）\n"
             "====================\n"
             "【基础记账】\n"
             "/ac + [金额] [来源] [备注] - 加收入（例：/ac + 5000 工资 6月）\n"
@@ -55,7 +55,7 @@ class AccountingPlugin(Star):
             "/ac aa 清账 [ID] - 标记AA账单为已清账（ID从对账获取）\n"
             "====================\n"
             "💡 插件信息：\n"
-            "作者：anchor | 版本：1.3.7"
+            "作者：anchor | 版本：1.3.8"
         )
         yield event.plain_result(help_text)
 
@@ -205,17 +205,17 @@ class AccountingPlugin(Star):
         current_time = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
         current_timestamp = int(time.time())
 
-        # 操作1：AA对账 - 将 yield from 改为 await
+        # 操作1：AA对账 - 彻底移除yield from，直接收集结果并返回
         if args and args[0] == "对账":
-            result = await self._show_aa_bills(event)
-            yield from result
+            async for res in self._show_aa_bills(event):
+                yield res
             return
 
-        # 操作2：AA清账 - 将 yield from 改为 await
+        # 操作2：AA清账 - 彻底移除yield from，直接收集结果并返回
         if len(args) >= 2 and args[0] == "清账":
             bill_id = args[1]
-            result = await self._clear_aa_bill(event, bill_id, current_time)
-            yield from result
+            async for res in self._clear_aa_bill(event, bill_id, current_time):
+                yield res
             return
 
         # 操作3：创建+分账（最少需要1个参与人+金额）
@@ -427,4 +427,4 @@ class AccountingPlugin(Star):
     async def terminate(self):
         self._save_accounting_data()
         self._save_aa_data()
-        logger.info("记账插件（v1.3.7 修复版）已卸载，数据已保存")
+        logger.info("记账插件（v1.3.8 修复版）已卸载，数据已保存")
