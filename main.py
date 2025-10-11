@@ -27,11 +27,11 @@ class SimpleAABill:
         self.members[payer_id] = payer_name
         return True
 
-    def calculate_aa(self) -> Tuple[float, int, Dict[str, float]]:
-        """计算AA结果：返回（总金额, 参与人数, 每人应付金额）"""
+    def calculate_aa(self) -> Tuple[float, int, float, Dict[str, float]]:
+        """计算AA结果：返回（总金额, 参与人数, 每人应付金额, 收支差额）"""
         member_count = len(self.members)
         if member_count == 0:
-            return (0.0, 0, {})
+            return (0.0, 0, 0.0, {})
         # 每人应付金额 = 总金额 / 参与人数（保留2位小数）
         per_person = round(self.total_amount / member_count, 2)
         # 统计每人已付款金额
@@ -53,14 +53,16 @@ class SimpleAABill:
         self.create_time = datetime.now().strftime("%Y-%m-%d %H:%M")  # 重置创建时间
 
 
+# 修复：将plugin_name改为旧版兼容的name参数
 @register(
-    plugin_name="astrbot_plugin_aa_simple_feishu",  # 飞书精简版插件名
+    name="astrbot_plugin_aa_simple_feishu",  # 旧版AstrBot用name，需以astrbot_plugin_开头
     author="YourName",
     description="飞书群简易AA记账：/aa 姓名 金额（记账）、/aa 对账（算AA）、/aa 清（清账）",
     version="1.0.0",
     repo_url=""  # 无需仓库可留空
 )
 class SimpleAASplitFeishuPlugin(Star):
+    # 修复：移除旧版不支持的config参数（避免初始化报错）
     def __init__(self, context: Context):
         super().__init__(context)
         # 飞书群账单存储：{群ID: SimpleAABill对象}（确保不同群数据隔离）
