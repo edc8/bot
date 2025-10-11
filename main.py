@@ -1,6 +1,5 @@
-# 从正确路径导入filter装饰器（适配当前框架版本）
-from astrbot.api import filter
-from astrbot.api.event import AstrMessageEvent
+# 适配框架的正确导入方式：使用on_message装饰器
+from astrbot.api.event import on_message, AstrMessageEvent
 from astrbot.api.star import Context, Star, register
 from astrbot.api import logger
 from typing import Dict, List, Optional
@@ -15,7 +14,7 @@ from datetime import datetime
     "aa_settlement",  # 插件唯一标识
     "anchor",          # 作者
     "简易AA记账机器人（支持创建账单、查询、对账、清账）",  # 描述
-    "2.4.0",           # 版本号（已更新）
+    "2.5.0",           # 版本号
     "https://github.com/edc8/bot"  # 插件仓库地址
 )
 class AASettlementPlugin(Star):
@@ -30,8 +29,8 @@ class AASettlementPlugin(Star):
         # 加载数据
         self._load_persistent_data()
 
-    # 主入口：消息处理
-    @filter()
+    # 主入口：使用on_message装饰器替代filter（适配当前框架）
+    @on_message()
     async def handle_message(self, event: AstrMessageEvent):
         """处理所有/aa开头的指令"""
         content = event.get_content().strip()
@@ -46,7 +45,7 @@ class AASettlementPlugin(Star):
         if response:
             await event.reply(response)
 
-    # 指令处理逻辑
+    # 指令处理逻辑（与之前保持一致）
     async def _process_command(self, event: AstrMessageEvent, params: List[str]) -> str:
         """分发不同指令"""
         if not params:
@@ -82,7 +81,7 @@ class AASettlementPlugin(Star):
         else:
             return f"❌ 未知命令：{cmd}\n{self._get_help_text()}"
 
-    # ---------------------- 核心功能实现 ----------------------
+    # ---------------------- 核心功能实现（与之前保持一致） ----------------------
     async def _create_bill(self, event: AstrMessageEvent, params: List[str]) -> str:
         """创建AA账单"""
         if len(params) < 2:
