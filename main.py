@@ -1,4 +1,5 @@
-from astrbot.api.event import filter, AstrMessageEvent
+# 从filter模块中正确导入filter装饰器（关键修复）
+from astrbot.api.event.filter import filter, AstrMessageEvent
 from astrbot.api.star import Context, Star, register
 from astrbot.api import logger
 from typing import Dict, List, Optional
@@ -10,50 +11,53 @@ from datetime import datetime
 
 
 @register(
-    "aa_settlement",  # 插件名称
-    "anchor",          # 作者
-    "简易AA记账机器人（支持创建账单、查询、对账、清账）",  # 描述
-    "2.2.0"            # 版本
+    "aa_settlement",  # 插件唯一标识（不可重复）
+    "anchor",          # 插件作者
+    "简易AA记账机器人（支持创建账单、查询、对账、清账）",  # 插件描述
+    "2.3.0",           # 插件版本（已更新版本号）
+    "https://github.com/edc8/bot"  # 插件仓库地址（与安装地址一致）
 )
 class AASettlementPlugin(Star):
     def __init__(self, context: Context):
+        """插件初始化：加载数据与初始化结构"""
         super().__init__(context)
-        # 核心数据结构
-        self.aa_bills: Dict[str, List[Dict]] = {}  # 按用户ID存储账单
-        self.settlement_records: Dict[str, List[Dict]] = {}  # 清账记录
-        # 数据持久化路径
+        # 核心数据结构（按用户ID隔离数据）
+        self.aa_bills: Dict[str, List[Dict]] = {}  # 存储账单：key=用户ID，value=账单列表
+        self.settlement_records: Dict[str, List[Dict]] = {}  # 存储清账记录
+        
+        # 数据持久化路径（插件目录下）
         self.bills_path = os.path.join(os.path.dirname(__file__), "aa_bills.json")
         self.records_path = os.path.join(os.path.dirname(__file__), "settlement_records.json")
-        # 加载数据
-        self._load_data()
+        
+        # 加载历史数据
+        self._load_persistent_data()
 
-    # 主入口：使用消息内容直接解析，避免框架参数传递问题
+    # ---------------------- 消息处理入口 ----------------------
     @filter()
     async def handle_message(self, event: AstrMessageEvent):
-        """直接处理消息内容，绕过可能有问题的命令解析器"""
+        """处理所有消息，只响应/aa开头的指令"""
         content = event.get_content().strip()
         if not content.startswith("/aa"):
-            return  # 只处理/aa开头的指令
-
-        # 分割指令（处理多余空格）
-        parts = list(filter(None, content.split(" ")))[1:]  # 去掉第一个元素"/aa"
-        result = await self._process_command(event, parts)
+            return  # 忽略非/aa指令
         
-        # 使用框架原生方式返回结果，避免参数传递错误
-        if result:
-            await event.reply(result)
+        # 解析指令参数（处理多空格情况）
+        parts = list(filter(None, content.split(" ")))[1:]  # 去除"/aa"后的参数列表
+        response = await self._process_command(event, parts)
+        
+        # 回复结果
+        if response:
+            await event.reply(response)
 
-    # 命令处理逻辑
-    async def _process_command(self, event: AstrMessageEvent, parts: List[str]):
-        """根据指令部分处理不同功能"""
-        if not parts:
+    # ---------------------- 指令处理逻辑 ----------------------
+    async def _process_command(self, event: AstrMessageEvent, params: List[str]) -> str:
+        """分发不同指令到对应处理函数"""
+        if not params:
             return self._get_help_text()  # /aa 显示帮助
         
-        # 解析命令类型
-        cmd = parts[0]
-        args = parts[1:] if len(parts) > 1 else []
+        cmd = params[0]
+        args = params[1:] if len(params) > 1 else []
         
-        # 创建账单：/aa 陈 100 或 /aa 张三 李四 600 聚餐
+        # 创建账单：/aa 参与人 金额 [描述]
         if cmd not in ["查", "对账", "清账", "帮助"]:
             return await self._create_bill(event, [cmd] + args)
         
@@ -61,13 +65,13 @@ class AASettlementPlugin(Star):
         elif cmd == "查":
             return await self._list_bills(event)
         
-        # 查看债务明细：/aa 对账 [账单ID]
+        # 查看债务明细：/aa 对账 账单ID
         elif cmd == "对账":
             if not args:
                 return "❌ 请指定账单ID！\n用法：/aa 对账 [账单ID]\n示例：/aa 对账 abc123"
             return await self._show_debt(event, args[0])
         
-        # 标记清账：/aa 清账 [账单ID]
+        # 标记清账：/aa 清账 账单ID
         elif cmd == "清账":
             if not args:
                 return "❌ 请指定账单ID！\n用法：/aa 清账 [账单ID]\n示例：/aa 清账 abc123"
@@ -81,8 +85,8 @@ class AASettlementPlugin(Star):
             return f"❌ 未知命令：{cmd}\n{self._get_help_text()}"
 
     # ---------------------- 核心功能实现 ----------------------
-    async def _create_bill(self, event: AstrMessageEvent, params: List[str]):
-        """创建账单：params为[参与人1, 参与人2, ..., 金额, 描述可选]"""
+    async def _create_bill(self, event: AstrMessageEvent, params: List[str]) -> str:
+        """创建AA账单"""
         if len(params) < 2:
             return (
                 "❌ 格式错误！正确用法：\n"
@@ -92,9 +96,8 @@ class AASettlementPlugin(Star):
                 "   示例：/aa 张三 李四 600 聚餐"
             )
 
-        # 解析金额和参与人
+        # 解析金额（从后往前找第一个数字）
         try:
-            # 从后往前找金额（最后一个数字）
             amount = None
             amount_idx = -1
             for i in reversed(range(len(params))):
@@ -106,7 +109,7 @@ class AASettlementPlugin(Star):
                     continue
             
             if amount is None or amount <= 0:
-                return "❌ 金额错误！请输入有效的正数金额"
+                return "❌ 金额错误！请输入有效的正数"
 
             # 提取参与人、金额、描述
             participants = params[:amount_idx]
@@ -116,15 +119,15 @@ class AASettlementPlugin(Star):
         except Exception as e:
             return f"❌ 解析失败：{str(e)}"
 
-        # 补充付款人（当前用户）
+        # 补充付款人信息
         payer_id = event.get_sender_id()
         payer_name = event.get_sender_name() or f"用户{payer_id[:4]}"
         if payer_name not in participants:
             participants.append(payer_name)
-        participants = list(set(participants))  # 去重
+        participants = list(set(participants))
         total_people = len(participants)
 
-        # 计算分摊
+        # 计算分摊金额
         per_person = round(total_amount / total_people, 2)
         diff = round(total_amount - (per_person * total_people), 2)
 
@@ -143,7 +146,7 @@ class AASettlementPlugin(Star):
             "total_people": total_people,
             "per_person": per_person,
             "diff": diff,
-            "status": "pending",  # 待清账
+            "status": "pending",
             "create_time": create_time,
             "timestamp": timestamp,
             "clear_time": None,
@@ -153,7 +156,7 @@ class AASettlementPlugin(Star):
 
         # 保存账单
         self.aa_bills.setdefault(payer_id, []).append(bill)
-        self._save_data()
+        self._save_persistent_data()
 
         # 生成结果
         result = (
@@ -178,7 +181,7 @@ class AASettlementPlugin(Star):
         )
         return result
 
-    async def _list_bills(self, event: AstrMessageEvent):
+    async def _list_bills(self, event: AstrMessageEvent) -> str:
         """查看账单列表"""
         user_id = event.get_sender_id()
         bills = self.aa_bills.get(user_id, [])
@@ -207,7 +210,7 @@ class AASettlementPlugin(Star):
             )
         return result
 
-    async def _show_debt(self, event: AstrMessageEvent, bill_id: str):
+    async def _show_debt(self, event: AstrMessageEvent, bill_id: str) -> str:
         """查看债务明细"""
         user_id = event.get_sender_id()
         for bill in self.aa_bills.get(user_id, []):
@@ -237,7 +240,7 @@ class AASettlementPlugin(Star):
         
         return f"❌ 未找到账单ID「{bill_id}」\n💡 查看所有账单：/aa 查"
 
-    async def _clear_bill(self, event: AstrMessageEvent, bill_id: str):
+    async def _clear_bill(self, event: AstrMessageEvent, bill_id: str) -> str:
         """标记清账"""
         user_id = event.get_sender_id()
         clearer_name = event.get_sender_name() or f"用户{user_id[:4]}"
@@ -268,7 +271,7 @@ class AASettlementPlugin(Star):
                     "timestamp": int(time.time())
                 })
                 
-                self._save_data()
+                self._save_persistent_data()
                 return (
                     f"✅ 账单「{bill_id}」已标记为清账！\n"
                     "=" * 40 + "\n"
@@ -316,7 +319,7 @@ class AASettlementPlugin(Star):
         )
 
     # ---------------------- 数据持久化 ----------------------
-    def _load_data(self):
+    def _load_persistent_data(self):
         """加载账单和清账记录"""
         try:
             if os.path.exists(self.bills_path):
@@ -330,7 +333,7 @@ class AASettlementPlugin(Star):
             self.aa_bills = {}
             self.settlement_records = {}
 
-    def _save_data(self):
+    def _save_persistent_data(self):
         """保存数据"""
         try:
             with open(self.bills_path, "w", encoding="utf-8") as f:
@@ -342,6 +345,5 @@ class AASettlementPlugin(Star):
 
     async def terminate(self):
         """插件卸载时保存数据"""
-        self._save_data()
+        self._save_persistent_data()
         logger.info("AA记账插件已卸载，数据已保存")
-    
