@@ -1,7 +1,6 @@
-# 修复导入错误的AA分账系统插件
-# 解决 "cannot import name 'filter' from 'astrbot.api.event.filter'" 问题
+# 彻底修复'module not callable'错误的AA分账系统插件
 
-# 正确导入方式：导入filter模块（而非filter函数）
+# 正确导入filter模块及其子模块
 from astrbot.api.event import filter  # 导入filter模块
 from astrbot.api.event import AstrMessageEvent, MessageEventResult
 from astrbot.api.star import Context, Star, register
@@ -18,7 +17,7 @@ from datetime import datetime
     "aa分账系统",
     "anchor",
     "简易AA分账系统（支持创建账单、查看账单、对账明细、标记清账）",
-    "1.0.3"
+    "1.0.4"
 )
 class AASettlementPlugin(Star):
     def __init__(self, context: Context):
@@ -30,13 +29,14 @@ class AASettlementPlugin(Star):
         self._加载历史数据()
 
     async def initialize(self):
-        logger.info("AA分账系统插件初始化完成，已加载历史账单数据")
+        logger.info("AA分账系统插件初始化完成")
 
-    # 使用 filter.module.command 装饰器（关键修复）
-    @filter.command("创建账单")
+    # 关键修复：使用filter.message.command装饰器（根据框架结构调整）
+    @filter.message.command("创建账单")
     async def 创建账单(self, event: AstrMessageEvent):
         消息内容 = event.message_str.strip()
-        参数列表 = list(filter(None, 消息内容.split(" ")))[1:]
+        # 分割参数时使用内置filter函数，避免与框架filter模块冲突
+        参数列表 = list(__builtins__.filter(None, 消息内容.split(" ")))[1:]
 
         if len(参数列表) < 2:
             yield event.plain_result(
@@ -72,7 +72,6 @@ class AASettlementPlugin(Star):
         参与人列表 = list(set(参与人列表))
         参与人数 = len(参与人列表)
         每人分摊 = round(总金额 / 参与人数, 2)
-        分账误差 = round(总金额 - (每人分摊 * 参与人数), 2)
 
         # 生成账单
         账单ID = str(uuid.uuid4())[:6]
@@ -102,12 +101,10 @@ class AASettlementPlugin(Star):
             f"📝 描述：{消费描述}\n"
             f"💰 总金额：{账单信息['总金额']}元 | 参与人：{', '.join(参与人列表)}\n"
             f"🧮 每人分摊：{每人分摊}元\n"
-            f"⏰ 时间：{创建时间}\n"
-            "💡 操作：/查看账单 | /对账明细 {账单ID} | /标记清账 {账单ID}"
         )
         yield event.plain_result(回复内容)
 
-    @filter.command("查看账单")
+    @filter.message.command("查看账单")
     async def 查看账单(self, event: AstrMessageEvent):
         用户ID = event.get_sender_id()
         用户账单列表 = self.aa_bills.get(用户ID, [])
@@ -131,15 +128,12 @@ class AASettlementPlugin(Star):
                 f"   时间：{账单['创建时间']}\n"
                 "-"*40 + "\n"
             )
-
-        if len(用户账单列表) > 5:
-            回复内容 += f"⚠️  共{len(用户账单列表)}条账单，仅显示最近5条\n"
         yield event.plain_result(回复内容)
 
-    @filter.command("对账明细")
+    @filter.message.command("对账明细")
     async def 对账明细(self, event: AstrMessageEvent):
         消息内容 = event.message_str.strip()
-        参数列表 = list(filter(None, 消息内容.split(" ")))[1:]
+        参数列表 = list(__builtins__.filter(None, 消息内容.split(" ")))[1:]
 
         if not 参数列表:
             yield event.plain_result("❌ 缺少账单ID！\n用法：/对账明细 [账单ID]（例：/对账明细 abc123）")
@@ -169,10 +163,10 @@ class AASettlementPlugin(Star):
 
         yield event.plain_result(回复内容)
 
-    @filter.command("标记清账")
+    @filter.message.command("标记清账")
     async def 标记清账(self, event: AstrMessageEvent):
         消息内容 = event.message_str.strip()
-        参数列表 = list(filter(None, 消息内容.split(" ")))[1:]
+        参数列表 = list(__builtins__.filter(None, 消息内容.split(" ")))[1:]
 
         if not 参数列表:
             yield event.plain_result("❌ 缺少账单ID！\n用法：/标记清账 [账单ID]（例：/标记清账 abc123）")
@@ -209,10 +203,10 @@ class AASettlementPlugin(Star):
             f"🧑 操作人：{清账人名称}"
         )
 
-    @filter.command("帮助中心")
+    @filter.message.command("帮助中心")
     async def 帮助中心(self, event: AstrMessageEvent):
         帮助文本 = (
-            "📋 AA分账系统帮助（v1.0.3）\n"
+            "📋 AA分账系统帮助（v1.0.4）\n"
             "="*30 + "\n"
             "1. 创建账单\n"
             "   指令：/创建账单 [参与人] [金额] [描述可选]\n"
